@@ -115,10 +115,32 @@ pub fn runCommand(arena: std.mem.Allocator, args: RunCommandArgs) ![]const u8 {
     return res.stdout;
 }
 
+pub const ScrapeArgs = struct {
+    url: []const u8,
+    query_selector: ?[]const u8,
+};
+
+/// Scrape a web page and convert it to markdown. Optionally filter to a CSS selector.
+pub fn scrape(http_client: *tk.http.Client, arena: std.mem.Allocator, args: ScrapeArgs) ![]const u8 {
+    const res = try http_client.request(arena, .{ .url = args.url });
+
+    const doc = try tk.dom.Document.parseFromSlice(arena, res.body);
+    defer doc.deinit();
+
+    var node = &doc.node;
+
+    if (args.query_selector) |sel| {
+        if (try doc.querySelector(sel)) |el| node = &el.node;
+    }
+
+    return try tk.html2md.html2md(arena, node, .{});
+}
+
 /// Register all standard tools with an AgentToolbox.
 pub fn registerAllTools(toolbox: *tk.ai.AgentToolbox) !void {
     try toolbox.addTool("read_file", "Read the contents of a file", readFile);
     try toolbox.addTool("write_file", "Write content to a file, creating directories if needed", writeFile);
     try toolbox.addTool("edit_file", "Edit a file by replacing specific content. Set replace_all=true to replace all occurrences", editFile);
     try toolbox.addTool("run_command", "Execute a shell command and return its output", runCommand);
+    try toolbox.addTool("scrape", "Scrape a web page and convert it to markdown. Optionally filter to a CSS selector", scrape);
 }

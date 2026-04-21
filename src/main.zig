@@ -3,7 +3,7 @@ const tk = @import("tokamak");
 const tools = @import("tools.zig");
 
 // TODO: This shouldn't be hard-coded
-const tool_names: []const []const u8 = &.{ "read_file", "write_file", "edit_file", "run_command" };
+const tool_names: []const []const u8 = &.{ "read_file", "write_file", "edit_file", "run_command", "scrape" };
 
 const Config = struct {
     ai_client: tk.ai.ClientConfig = .{
