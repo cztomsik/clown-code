@@ -42,26 +42,32 @@ pub const EditFileArgs = struct {
     path: []const u8,
     old_content: []const u8,
     new_content: []const u8,
+    replace_all: bool = false,
 };
 
 /// Edit a file by replacing specific content.
-/// The old_content must exist exactly once in the file.
+/// If replace_all is false (default), old_content must exist exactly once.
 pub fn editFile(arena: std.mem.Allocator, args: EditFileArgs) ![]const u8 {
     // Read current content
     const content = try readFile(arena, .{ .path = args.path });
+    var new_content = content;
 
-    // Find old_content
-    const pos = std.mem.indexOf(u8, content, args.old_content) orelse {
-        return error.ContentNotFound;
-    };
+    if (!args.replace_all) {
+        // Find old_content
+        const pos = std.mem.indexOf(u8, content, args.old_content) orelse {
+            return error.ContentNotFound;
+        };
 
-    // Check that it only appears once
-    if (std.mem.indexOf(u8, content[pos + args.old_content.len ..], args.old_content) != null) {
-        return error.AmbiguousMatch;
+        // Check that it only appears once
+        if (std.mem.indexOf(u8, content[pos + args.old_content.len ..], args.old_content) != null) {
+            return error.AmbiguousMatch;
+        }
+
+        // Build new content
+        new_content = try std.mem.concat(arena, u8, &.{ content[0..pos], args.new_content, content[pos + args.old_content.len ..] });
+    } else {
+        new_content = try std.mem.replaceOwned(u8, arena, content, args.old_content, args.new_content);
     }
-
-    // Build new content
-    const new_content = try std.mem.concat(arena, u8, &.{ content[0..pos], args.new_content, content[pos + args.old_content.len ..] });
 
     // Write back
     const write_file = try std.fs.cwd().createFile(args.path, .{});
@@ -113,6 +119,6 @@ pub fn runCommand(arena: std.mem.Allocator, args: RunCommandArgs) ![]const u8 {
 pub fn registerAllTools(toolbox: *tk.ai.AgentToolbox) !void {
     try toolbox.addTool("read_file", "Read the contents of a file", readFile);
     try toolbox.addTool("write_file", "Write content to a file, creating directories if needed", writeFile);
-    try toolbox.addTool("edit_file", "Edit a file by replacing specific content (old_content must appear exactly once)", editFile);
+    try toolbox.addTool("edit_file", "Edit a file by replacing specific content. Set replace_all=true to replace all occurrences", editFile);
     try toolbox.addTool("run_command", "Execute a shell command and return its output", runCommand);
 }
