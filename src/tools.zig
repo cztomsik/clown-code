@@ -1,5 +1,7 @@
 const std = @import("std");
 const tk = @import("tokamak");
+const Clown = @import("model.zig").Clown;
+const TodoItem = @import("model.zig").TodoItem;
 
 // Standard file system and shell tools for AI agents.
 
@@ -136,11 +138,33 @@ pub fn scrape(http_client: *tk.http.Client, arena: std.mem.Allocator, args: Scra
     return try tk.html2md.html2md(arena, node, .{});
 }
 
+pub const UpdateTodosArgs = struct {
+    upsert: []const TodoItem,
+};
+
+pub fn updateTodos(clown: *Clown, arena: std.mem.Allocator, args: UpdateTodosArgs) ![]const u8 {
+    for (args.upsert) |ch| {
+        for (clown.todos.items) |*it| {
+            if (std.mem.eql(u8, it.name, ch.name)) {
+                it.* = ch;
+            }
+        } else {
+            try clown.todos.append(arena, ch);
+        }
+    }
+
+    var aw: std.io.Writer.Allocating = .init(arena);
+    var yw: tk.serde.yaml.Writer = .init(&aw.writer, .{});
+    try tk.serde.serialize(&yw, clown.todos);
+    return aw.toOwnedSlice();
+}
+
 /// Register all standard tools with an AgentToolbox.
 pub fn registerAllTools(toolbox: *tk.ai.AgentToolbox) !void {
-    try toolbox.addTool("read_file", "Read the contents of a file", readFile);
-    try toolbox.addTool("write_file", "Write content to a file, creating directories if needed", writeFile);
-    try toolbox.addTool("edit_file", "Edit a file by replacing specific content. Set replace_all=true to replace all occurrences", editFile);
+    try toolbox.addTool("todos_update", "Create/update todo item(s)", updateTodos);
+    try toolbox.addTool("file_read", "Read the contents of a file", readFile);
+    try toolbox.addTool("file_write", "Write content to a file, creating directories if needed", writeFile);
+    try toolbox.addTool("file_edit", "Edit a file by replacing specific content. Set replace_all=true to replace all occurrences", editFile);
     try toolbox.addTool("run_command", "Execute a shell command and return its output", runCommand);
     try toolbox.addTool("scrape", "Scrape a web page and convert it to markdown. Optionally filter to a CSS selector", scrape);
 }
