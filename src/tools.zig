@@ -4,6 +4,9 @@ const Clown = @import("model.zig").Clown;
 const TodoItem = @import("model.zig").TodoItem;
 
 // Standard file system and shell tools for AI agents.
+//
+// NOTE: tk.ai.AgentTool handles JSON schema generation, input validation, and
+// native Zig type support. Return values are formatted via tk.ai.fmt() for LLMs.
 
 pub const ReadFileArgs = struct {
     path: []const u8,
@@ -144,18 +147,14 @@ pub const HackerNewsArgs = struct {
 };
 
 /// Get stories from Hacker News.
-pub fn hackerNews(http_client: *tk.http.Client, arena: std.mem.Allocator, args: HackerNewsArgs) ![]const u8 {
+pub fn hackerNews(http_client: *tk.http.Client, arena: std.mem.Allocator, args: HackerNewsArgs) ![]const tk.ext.hackernews.Story {
     var client = tk.ext.hackernews.Client{ .http_client = http_client };
-    const stories = switch (args.sort) {
+
+    return switch (args.sort) {
         .top => try client.getTopStories(arena, args.limit),
         .new => try client.getNewStories(arena, args.limit),
         .best => try client.getBestStories(arena, args.limit),
     };
-
-    var aw: std.io.Writer.Allocating = .init(arena);
-    var yw: tk.serde.yaml.Writer = .init(&aw.writer, .{});
-    try tk.serde.serialize(&yw, stories);
-    return aw.toOwnedSlice();
 }
 
 pub const RedditArgs = struct {
@@ -165,25 +164,21 @@ pub const RedditArgs = struct {
 };
 
 /// Get posts from a Reddit subreddit.
-pub fn reddit(http_client: *tk.http.Client, arena: std.mem.Allocator, args: RedditArgs) ![]const u8 {
+pub fn reddit(http_client: *tk.http.Client, arena: std.mem.Allocator, args: RedditArgs) ![]const tk.ext.reddit.Post {
     var client = tk.ext.reddit.Client{ .http_client = http_client };
-    const posts = switch (args.sort) {
+
+    return switch (args.sort) {
         .hot => try client.getHotPosts(arena, args.subreddit, args.limit),
         .new => try client.getNewPosts(arena, args.subreddit, args.limit),
         .top => try client.getTopPosts(arena, args.subreddit, args.limit),
     };
-
-    var aw: std.io.Writer.Allocating = .init(arena);
-    var yw: tk.serde.yaml.Writer = .init(&aw.writer, .{});
-    try tk.serde.serialize(&yw, posts);
-    return aw.toOwnedSlice();
 }
 
 pub const UpdateTodosArgs = struct {
     upsert: []const TodoItem,
 };
 
-pub fn updateTodos(clown: *Clown, arena: std.mem.Allocator, args: UpdateTodosArgs) ![]const u8 {
+pub fn updateTodos(clown: *Clown, arena: std.mem.Allocator, args: UpdateTodosArgs) ![]const TodoItem {
     for (args.upsert) |ch| {
         for (clown.todos.items) |*it| {
             if (std.mem.eql(u8, it.name, ch.name)) {
@@ -194,10 +189,7 @@ pub fn updateTodos(clown: *Clown, arena: std.mem.Allocator, args: UpdateTodosArg
         }
     }
 
-    var aw: std.io.Writer.Allocating = .init(arena);
-    var yw: tk.serde.yaml.Writer = .init(&aw.writer, .{});
-    try tk.serde.serialize(&yw, clown.todos);
-    return aw.toOwnedSlice();
+    return clown.todos.items;
 }
 
 /// Register all standard tools with an AgentToolbox.
@@ -210,4 +202,19 @@ pub fn registerAllTools(toolbox: *tk.ai.AgentToolbox) !void {
     try toolbox.addTool("scrape", "Scrape a web page and convert it to markdown. Optionally filter to a CSS selector", scrape);
     try toolbox.addTool("hacker_news", "Get stories from Hacker News", hackerNews);
     try toolbox.addTool("reddit", "Get posts from a Reddit subreddit", reddit);
+}
+
+test runCommand {
+    var arena_impl = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const res1 = try runCommand(arena, .{ .command = "echo hello" });
+    try std.testing.expectEqualStrings("hello\n", res1);
+
+    const res2 = try runCommand(arena, .{ .command = "find . -name build.zig" });
+    try std.testing.expect(std.mem.indexOf(u8, res2, "build.zig") != null);
+
+    const res3 = try runCommand(arena, .{ .command = "grep -r \"\\.addTool()\" --include=\"*.zig\" ." });
+    try std.testing.expect(std.mem.indexOf(u8, res3, "tools.zig") != null);
 }

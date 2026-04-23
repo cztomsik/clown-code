@@ -27,3 +27,7 @@ const App = struct {
 pub fn main() !void {
     try tk.app.run(Tui.run, &.{ Config, App });
 }
+
+test {
+    std.testing.refAllDecls(@This());
+}
