@@ -52,10 +52,7 @@ pub const Clown = struct {
     }
 
     pub fn retry(self: *Clown) !void {
-        while (self.agent.messages.pop()) |msg| {
-            if (msg.role == .assistant) break;
-        }
-
+        self.agent.undo();
         self.agent.result = null;
         self.busy = true;
     }
