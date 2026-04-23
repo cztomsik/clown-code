@@ -17,6 +17,7 @@ pub const Tui = struct {
             switch (try self.ctx.tick()) {
                 .render => |ui| self.render(ui),
                 .key => |k| switch (k) {
+                    // TODO: ctrl_c/esc should clown.stop(), double ctrl_c should break (we could save last key + last time and do both)
                     .ctrl_c => break,
                     .escape => {
                         // Double escape within 2s -> clear text buffer
@@ -42,9 +43,7 @@ pub const Tui = struct {
                     else => self.ctx.pending_key = k,
                 },
                 .idle => {
-                    // TODO: This is now called periodically, so all we need to do is to wrap agent in a thread or something
-                    if (self.clown.busy) {
-                        try self.clown.tick();
+                    if (try self.clown.tick() == .finished) {
                         self.ctx.next_tick = .render;
                     }
                 },
@@ -78,6 +77,11 @@ pub const Tui = struct {
                             }
                         }
                     }
+                }
+
+                if (self.clown.busy()) {
+                    g.spacer(1);
+                    g.text("Processing...");
                 }
             }
         }
