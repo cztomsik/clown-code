@@ -4,9 +4,8 @@ A lightweight AI coding assistant built with tokamak.
 
 ```bash
 # Start llama.cpp server
-# llama-server -hf ggml-org/gemma-4-31B-it-GGUF:Q8_0 --spec-type ngram-cache --offline
-# llama-server -hf unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0.00 --chat-template-kwargs '{"preserve_thinking": true}' --spec-type ngram-cache --offline
-# llama-server -m ~/Downloads/models/gemma-4-E4B-it-IQ4_NL.gguf --temp 1.0 --top-p 0.95 --top-k 64 --spec-type ngram-cache
+# llama-server -hf ggml-org/gemma-4-31B-it-GGUF:Q8_0 --mlock --spec-default --offline
+# llama-server -hf unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL --mlock --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0.00 --chat-template-kwargs '{"preserve_thinking": true}' --spec-default --offline
 
 zig build run
 ```
