@@ -1,9 +1,6 @@
 const std = @import("std");
 const tk = @import("tokamak");
 
-// TODO: This shouldn't be hard-coded
-const tool_names: []const []const u8 = &.{ "todos_update", "file_read", "file_write", "file_edit", "run_command", "scrape", "hacker_news", "reddit" };
-
 pub const TodoItem = struct {
     name: []const u8,
     status: []const u8 = "pending",
@@ -15,8 +12,12 @@ pub const Clown = struct {
     busy: bool = false,
 
     pub fn init(gpa: std.mem.Allocator, agr: *tk.ai.AgentRuntime) !Clown {
-        var agent = try agr.createAgent(gpa, .{ .model = "", .tools = tool_names, .max_completion_tokens = 32 * 1024 });
+        var agent = try agr.createAgent(gpa, .{ .model = "", .max_completion_tokens = 32 * 1024 });
         errdefer agent.deinit();
+
+        // We do this later because we want it to be scoped with agent.arena.
+        var names = tk.iter.map(agr.toolbox.tools.keyIterator(), tk.meta.deref);
+        agent.options.tools = try tk.iter.collect(agent.arena, &names);
 
         const system_prompt = try loadSystemPrompt(agent.arena);
         try agent.addMessage(.{ .role = .system, .content = .{ .text = system_prompt } });
