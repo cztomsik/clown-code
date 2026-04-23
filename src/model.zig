@@ -2,7 +2,7 @@ const std = @import("std");
 const tk = @import("tokamak");
 
 // TODO: This shouldn't be hard-coded
-const tool_names: []const []const u8 = &.{ "todos_update", "file_read", "file_write", "file_edit", "run_command", "scrape" };
+const tool_names: []const []const u8 = &.{ "todos_update", "file_read", "file_write", "file_edit", "run_command", "scrape", "hacker_news", "reddit" };
 
 pub const TodoItem = struct {
     name: []const u8,

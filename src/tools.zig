@@ -138,6 +138,47 @@ pub fn scrape(http_client: *tk.http.Client, arena: std.mem.Allocator, args: Scra
     return try tk.html2md.html2md(arena, node, .{});
 }
 
+pub const HackerNewsArgs = struct {
+    sort: enum { top, new, best },
+    limit: u9 = 10,
+};
+
+/// Get stories from Hacker News.
+pub fn hackerNews(http_client: *tk.http.Client, arena: std.mem.Allocator, args: HackerNewsArgs) ![]const u8 {
+    var client = tk.ext.hackernews.Client{ .http_client = http_client };
+    const stories = switch (args.sort) {
+        .top => try client.getTopStories(arena, args.limit),
+        .new => try client.getNewStories(arena, args.limit),
+        .best => try client.getBestStories(arena, args.limit),
+    };
+
+    var aw: std.io.Writer.Allocating = .init(arena);
+    var yw: tk.serde.yaml.Writer = .init(&aw.writer, .{});
+    try tk.serde.serialize(&yw, stories);
+    return aw.toOwnedSlice();
+}
+
+pub const RedditArgs = struct {
+    subreddit: []const u8,
+    sort: enum { hot, new, top },
+    limit: u32 = 10,
+};
+
+/// Get posts from a Reddit subreddit.
+pub fn reddit(http_client: *tk.http.Client, arena: std.mem.Allocator, args: RedditArgs) ![]const u8 {
+    var client = tk.ext.reddit.Client{ .http_client = http_client };
+    const posts = switch (args.sort) {
+        .hot => try client.getHotPosts(arena, args.subreddit, args.limit),
+        .new => try client.getNewPosts(arena, args.subreddit, args.limit),
+        .top => try client.getTopPosts(arena, args.subreddit, args.limit),
+    };
+
+    var aw: std.io.Writer.Allocating = .init(arena);
+    var yw: tk.serde.yaml.Writer = .init(&aw.writer, .{});
+    try tk.serde.serialize(&yw, posts);
+    return aw.toOwnedSlice();
+}
+
 pub const UpdateTodosArgs = struct {
     upsert: []const TodoItem,
 };
@@ -167,4 +208,6 @@ pub fn registerAllTools(toolbox: *tk.ai.AgentToolbox) !void {
     try toolbox.addTool("file_edit", "Edit a file by replacing specific content. Set replace_all=true to replace all occurrences", editFile);
     try toolbox.addTool("run_command", "Execute a shell command and return its output", runCommand);
     try toolbox.addTool("scrape", "Scrape a web page and convert it to markdown. Optionally filter to a CSS selector", scrape);
+    try toolbox.addTool("hacker_news", "Get stories from Hacker News", hackerNews);
+    try toolbox.addTool("reddit", "Get posts from a Reddit subreddit", reddit);
 }
