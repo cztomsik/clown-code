@@ -19,6 +19,7 @@ const Worker = struct {
 const Snapshot = struct {
     messages: []tk.ai.chat.Message,
     todos: []TodoItem,
+    total_tokens: u32,
 };
 
 const TickRes = enum { idle, busy, updated };
@@ -162,6 +163,7 @@ pub const Clown = struct {
             const line = data[std.mem.lastIndexOf(u8, data[0..i], "\n") orelse 0 .. i];
             const res = try std.json.parseFromSliceLeaky(Snapshot, self.agent.arena, line, .{});
             self.agent.messages = .fromOwnedSlice(res.messages);
+            self.agent.total_tokens = res.total_tokens;
             self.todos.items = res.todos;
 
             // TODO: we should also clear & rebase our sink
@@ -193,6 +195,7 @@ pub const Clown = struct {
         const snap: Snapshot = .{
             .messages = self.agent.messages.items,
             .todos = self.todos.items,
+            .total_tokens = self.agent.total_tokens,
         };
 
         var buf: [BUF_SIZE]u8 = undefined;
