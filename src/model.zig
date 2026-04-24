@@ -60,6 +60,7 @@ pub const Clown = struct {
     pub fn clear(self: *Clown) void {
         self.stop();
         self.agent.messages.clearRetainingCapacity();
+        self.todos.clearRetainingCapacity();
     }
 
     pub fn send(self: *Clown, msg: []const u8) !void {
@@ -97,7 +98,7 @@ pub const Clown = struct {
     }
 
     pub fn @"continue"(self: *Clown) !void {
-        const filename = tk.util.trim(try tools.runCommand(self.agent.arena, .{ .command = "ls -1 session-*.json 2>/dev/null | head -1" }));
+        const filename = tk.util.trim(try tools.runCommand(self.agent.arena, .{ .command = "ls -1t session-*.json 2>/dev/null | head -1" }));
         if (filename.len == 0) return;
         try self.load(filename);
     }

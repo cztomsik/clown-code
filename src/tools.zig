@@ -17,7 +17,19 @@ pub fn readFile(arena: std.mem.Allocator, args: ReadFileArgs) ![]const u8 {
     const file = try std.fs.cwd().openFile(args.path, .{});
     defer file.close();
 
-    return file.readToEndAlloc(arena, 1024 * 1024);
+    const raw = try file.readToEndAlloc(arena, 1024 * 1024);
+
+    // Split into lines and format as "N: line"
+    var lines = std.mem.splitScalar(u8, raw, '\n');
+    var out = try std.ArrayList(u8).initCapacity(arena, raw.len);
+    defer out.deinit(arena);
+    var line_num: usize = 1;
+    while (lines.next()) |line| {
+        const formatted = try std.fmt.allocPrint(arena, "{d}: {s}\n", .{ line_num, line });
+        try out.appendSlice(arena, formatted);
+        line_num += 1;
+    }
+    return out.toOwnedSlice(arena);
 }
 
 pub const WriteFileArgs = struct {
@@ -53,8 +65,10 @@ pub const EditFileArgs = struct {
 /// Edit a file by replacing specific content.
 /// If replace_all is false (default), old_content must exist exactly once.
 pub fn editFile(arena: std.mem.Allocator, args: EditFileArgs) ![]const u8 {
-    // Read current content
-    const content = try readFile(arena, .{ .path = args.path });
+    // Read current content (without line numbers)
+    const file = try std.fs.cwd().openFile(args.path, .{});
+    defer file.close();
+    const content = try file.readToEndAlloc(arena, 1024 * 1024);
     var new_content = content;
 
     if (!args.replace_all) {
@@ -192,6 +206,24 @@ pub fn updateTodos(clown: *Clown, arena: std.mem.Allocator, args: UpdateTodosArg
     return clown.todos.items;
 }
 
+pub const LoadSkillArgs = struct {
+    skill_name: []const u8,
+};
+
+/// Load a skill file and inject its contents as system instructions into the agent's context.
+/// Builtin skills (init, compact) take precedence over user-provided skills.
+pub fn loadSkill(arena: std.mem.Allocator, args: LoadSkillArgs) ![]const u8 {
+    if (std.mem.eql(u8, args.skill_name, "init")) return @embedFile("skills/init.md");
+    if (std.mem.eql(u8, args.skill_name, "compact")) return @embedFile("skills/compact.md");
+
+    // TODO: Check for path traversal
+    const path = try std.fmt.allocPrint(arena, "skills/{s}.md", .{args.skill_name});
+    const file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    return file.readToEndAlloc(arena, 1024 * 1024);
+}
+
 /// Register all standard tools with an AgentToolbox.
 pub fn registerAllTools(toolbox: *tk.ai.AgentToolbox) !void {
     try toolbox.addTool("todos_update", "Create/update todo item(s)", updateTodos);
@@ -199,6 +231,7 @@ pub fn registerAllTools(toolbox: *tk.ai.AgentToolbox) !void {
     try toolbox.addTool("file_write", "Write content to a file, creating directories if needed", writeFile);
     try toolbox.addTool("file_edit", "Edit a file by replacing specific content. Set replace_all=true to replace all occurrences", editFile);
     try toolbox.addTool("run_command", "Execute a shell command and return its output", runCommand);
+    try toolbox.addTool("load_skill", "Load a set of specialized instructions (a skill) into the current context to improve performance on a specific task.", loadSkill);
     try toolbox.addTool("scrape", "Scrape a web page and convert it to markdown. Optionally filter to a CSS selector", scrape);
     try toolbox.addTool("hacker_news", "Get stories from Hacker News", hackerNews);
     try toolbox.addTool("reddit", "Get posts from a Reddit subreddit", reddit);
