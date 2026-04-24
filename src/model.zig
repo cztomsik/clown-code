@@ -2,7 +2,7 @@ const std = @import("std");
 const tk = @import("tokamak");
 const tools = @import("tools.zig");
 
-const BUF_SIZE = 512;
+const BUF_SIZE = 4096;
 
 pub const TodoItem = struct {
     name: []const u8,
@@ -11,17 +11,17 @@ pub const TodoItem = struct {
 
 const Worker = struct {
     pid: std.posix.pid_t,
-    pipe_read: std.fs.File,
-    pipe_res: std.ArrayList(u8),
+    pipe: std.fs.File,
+    sink: std.ArrayList(u8),
     started_at_ms: i64,
 };
 
-const WorkerSnapshot = struct {
+const Snapshot = struct {
     messages: []tk.ai.chat.Message,
     todos: []TodoItem,
 };
 
-const TickRes = enum { idle, busy, finished };
+const TickRes = enum { idle, busy, updated };
 
 pub const Clown = struct {
     agent: tk.ai.Agent,
@@ -124,8 +124,8 @@ pub const Clown = struct {
 
             self.worker = .{
                 .pid = pid,
-                .pipe_read = .{ .handle = pipe[0] },
-                .pipe_res = try .initCapacity(self.agent.arena, 1024),
+                .pipe = .{ .handle = pipe[0] },
+                .sink = try .initCapacity(self.agent.arena, 1024),
                 .started_at_ms = std.time.milliTimestamp(),
             };
         }
@@ -133,7 +133,7 @@ pub const Clown = struct {
 
     fn stop(self: *Clown) void {
         const worker = self.worker orelse return;
-        worker.pipe_read.close();
+        worker.pipe.close();
         std.posix.kill(worker.pid, std.posix.SIG.KILL) catch {};
         self.worker = null;
     }
@@ -147,36 +147,50 @@ pub const Clown = struct {
         // Read all we can (before we branch)
         while (true) {
             var buf: [BUF_SIZE]u8 = undefined;
-            const n = worker.pipe_read.read(&buf) catch |e| switch (e) {
+            const n = worker.pipe.read(&buf) catch |e| switch (e) {
                 error.WouldBlock => 0,
                 else => return e,
             };
             if (n == 0) break;
-            try worker.pipe_res.appendSlice(self.agent.arena, buf[0..n]);
+            try worker.sink.appendSlice(self.agent.arena, buf[0..n]);
+        }
+
+        // Check for any updates
+        var updated = false;
+        const data = worker.sink.items;
+        if (std.mem.lastIndexOf(u8, data, "\n")) |i| {
+            const line = data[std.mem.lastIndexOf(u8, data[0..i], "\n") orelse 0 .. i];
+            const res = try std.json.parseFromSliceLeaky(Snapshot, self.agent.arena, line, .{});
+            self.agent.messages = .fromOwnedSlice(res.messages);
+            self.todos.items = res.todos;
+
+            // TODO: we should also clear & rebase our sink
+            updated = true;
         }
 
         if (changed.pid == 0) {
-            // Try again later
-            return .busy;
+            return if (updated) return .updated else .busy;
         } else {
             // Worker finished
-            const snapshot = try std.json.parseFromSliceLeaky(WorkerSnapshot, self.agent.arena, worker.pipe_res.items, .{});
-            self.agent.messages = .fromOwnedSlice(snapshot.messages);
-            self.todos.items = snapshot.todos;
-
             self.worker = null;
-            // worker.pipe_read.close(); // TODO: I think we should close this but I'm getting .BADF
+            // worker.pipe.close(); // TODO: I think we should close this but I'm getting .BADF
 
-            return .finished;
+            return .updated;
         }
     }
 
     fn runWorker(self: *Clown, out: std.fs.File) !void {
         while (try self.agent.next()) |tcs| {
             try self.agent.acceptAll(tcs);
+            try self.sendSnapshot(out);
         }
 
-        const snap: WorkerSnapshot = .{
+        try self.sendSnapshot(out);
+        out.close();
+    }
+
+    fn sendSnapshot(self: *Clown, out: std.fs.File) !void {
+        const snap: Snapshot = .{
             .messages = self.agent.messages.items,
             .todos = self.todos.items,
         };
@@ -185,7 +199,7 @@ pub const Clown = struct {
         var bw = out.writer(&buf);
         var jw = tk.serde.json.Writer.init(&bw.interface, .{});
         try tk.serde.serialize(&jw, snap);
+        try bw.interface.writeAll("\n");
         try bw.interface.flush();
-        out.close();
     }
 };

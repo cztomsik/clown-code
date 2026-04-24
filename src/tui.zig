@@ -43,7 +43,7 @@ pub const Tui = struct {
                     else => self.ctx.pending_key = k,
                 },
                 .idle => {
-                    if (try self.clown.tick() == .finished) {
+                    if (try self.clown.tick() == .updated) {
                         self.ctx.next_tick = .render;
                     }
                 },
