@@ -101,7 +101,7 @@ pub const Tui = struct {
         const items = self.clown.todos.items;
         const st = ui.grid(&.{ -7, 7 }, @intCast(items.len + 1)) orelse return;
         st.frame.rect[1] += 1;
-        st.frame.z = 10;
+        st.frame.z = 20;
         st.container().layout.spacing = 0;
 
         if (st.collapsible(ui.ctx.fmt("Todos: {}", .{items.len}), ui.state(bool, false))) {

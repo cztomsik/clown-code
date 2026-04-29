@@ -193,10 +193,11 @@ pub const UpdateTodosArgs = struct {
 };
 
 pub fn updateTodos(clown: *Clown, arena: std.mem.Allocator, args: UpdateTodosArgs) ![]const TodoItem {
-    for (args.upsert) |ch| {
+    next: for (args.upsert) |ch| {
         for (clown.todos.items) |*it| {
             if (std.mem.eql(u8, it.name, ch.name)) {
                 it.* = ch;
+                continue :next;
             }
         } else {
             try clown.todos.append(arena, ch);
