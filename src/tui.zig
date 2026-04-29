@@ -189,6 +189,7 @@ pub const Tui = struct {
         if (std.mem.eql(u8, cmd, "clear")) self.clown.clear();
         if (std.mem.eql(u8, cmd, "init")) try self.clown.send("Could you /init this project?");
         if (std.mem.eql(u8, cmd, "retry")) try self.clown.retry();
+        if (std.mem.eql(u8, cmd, "sudo")) try self.clown.sudo();
         if (std.mem.eql(u8, cmd, "continue")) try self.clown.@"continue"();
         if (std.mem.eql(u8, cmd, "save")) try self.clown.save();
         if (std.mem.eql(u8, cmd, "load")) try self.clown.load(arg);
@@ -200,6 +201,7 @@ pub const Tui = struct {
                 \\ /clear       - Clear the conversation history
                 \\ /init        - Initialize project context
                 \\ /retry       - Retry the last interaction
+                \\ /sudo        - Retry with "sure" prefix
                 \\ /save        - Save the conversation
                 \\ /load <file> - Load a saved conversation
                 \\ /continue    - Continue the last session
