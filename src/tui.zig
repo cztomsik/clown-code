@@ -209,17 +209,11 @@ pub const Tui = struct {
             ;
         }
 
-        // if (std.mem.eql(u8, cmd, "models")) {
-        //     const models = try self.clown.agent.runtime.client.listModels(self.clown.agent.arena);
-        //     var buf: [1024]u8 = undefined;
-        //     var fws = std.io.fixedBufferStream(&buf);
-        //     const fw = fws.writer();
-        //     try fw.print("Available models:", .{});
-        //     for (models) |m| {
-        //         try fw.print("\n- {s}", .{m.id});
-        //     }
-        //     ui.flash(fws.getWritten());
-        // }
+        if (std.mem.eql(u8, cmd, "models")) {
+            const models = try self.clown.agent.runtime.client.listModels(self.clown.agent.arena);
+            // TODO: maybe the ctx.fmt() should be useful even for multi-frame prints...
+            self.flash = std.fmt.allocPrint(self.clown.agent.arena, "Available models:\n{f}", .{std.json.fmt(models, .{})}) catch "OOM";
+        }
 
         return true;
     }
