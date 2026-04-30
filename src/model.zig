@@ -16,18 +16,22 @@ const Worker = struct {
     started_at_ms: i64,
 };
 
+const WorkerMsg = union(enum) {
+    snapshot: Snapshot,
+    err: []const u8,
+};
+
 pub const Snapshot = struct {
     messages: []tk.ai.chat.Message,
     todos: []TodoItem,
     total_tokens: u32,
 };
 
-const TickRes = enum { idle, busy, updated };
-
 pub const Clown = struct {
     agent: tk.ai.Agent,
     todos: std.ArrayList(TodoItem) = .empty,
     worker: ?Worker = null,
+    err: ?[]const u8 = null,
 
     pub fn init(gpa: std.mem.Allocator, agr: *tk.ai.AgentRuntime) !Clown {
         var agent = try agr.createAgent(gpa, .{ .model = "default", .max_completion_tokens = 32 * 1024 });
@@ -119,6 +123,10 @@ pub const Clown = struct {
         return self.worker != null;
     }
 
+    pub fn elapsed(self: *const Clown) i64 {
+        return @divTrunc(std.time.milliTimestamp() - if (self.worker) |w| w.started_at_ms else 0, 1_000);
+    }
+
     fn makeSnapshot(self: *const Clown) Snapshot {
         return .{
             .messages = self.agent.messages.items,
@@ -135,7 +143,7 @@ pub const Clown = struct {
 
     fn start(self: *Clown) !void {
         self.stop();
-        self.agent.result = null;
+        self.err = null;
 
         const pipe = try std.posix.pipe();
         errdefer for (pipe) |fd| std.posix.close(fd);
@@ -143,8 +151,8 @@ pub const Clown = struct {
         const pid = try std.posix.fork();
         if (pid == 0) {
             std.posix.close(pipe[0]); // close read
-            self.runWorker(.{ .handle = pipe[1] }) catch |e| std.debug.panic("error: {s}", .{@errorName(e)});
-            std.process.exit(0);
+            self.workerMain(.{ .handle = pipe[1] });
+            unreachable;
         } else {
             std.posix.close(pipe[1]); // close write & set non-blocking
             const flags = try std.posix.fcntl(pipe[0], std.posix.F.GETFL, 0);
@@ -160,25 +168,22 @@ pub const Clown = struct {
     }
 
     fn stop(self: *Clown) void {
-        const worker = self.worker orelse return;
-        std.posix.kill(worker.pid, std.posix.SIG.KILL) catch {};
-        worker.pipe.close();
-        self.worker = null;
+        if (self.worker) |w| {
+            std.posix.kill(w.pid, std.posix.SIG.KILL) catch {};
+            w.pipe.close();
+            self.worker = null;
+        }
     }
 
-    pub fn tick(self: *Clown) !TickRes {
-        const worker = if (self.worker) |*w| w else return .idle;
-
+    pub fn tick(self: *Clown) !void {
         // Check worker status
+        const worker = if (self.worker) |*w| w else return;
         const changed = std.posix.waitpid(worker.pid, std.posix.W.NOHANG);
 
         // Read all we can (before we branch)
         while (true) {
             var buf: [BUF_SIZE]u8 = undefined;
-            const n = worker.pipe.read(&buf) catch |e| switch (e) {
-                error.WouldBlock => 0,
-                else => return e,
-            };
+            const n = worker.pipe.read(&buf) catch 0;
             if (n == 0) break;
             try worker.sink.appendSlice(self.agent.arena, buf[0..n]);
         }
@@ -189,39 +194,44 @@ pub const Clown = struct {
         if (std.mem.lastIndexOf(u8, data, "\n")) |last_nl| {
             const prev_nl = std.mem.lastIndexOf(u8, data[0..last_nl], "\n");
             const line = data[if (prev_nl) |p| p + 1 else 0..last_nl];
-            const res = try std.json.parseFromSliceLeaky(Snapshot, self.agent.arena, line, .{ .allocate = .alloc_always });
-            self.loadSnapshot(res);
+            const msg = try std.json.parseFromSliceLeaky(WorkerMsg, self.agent.arena, line, .{ .allocate = .alloc_always });
+
+            switch (msg) {
+                .snapshot => |s| self.loadSnapshot(s),
+                .err => |e| self.err = e,
+            }
 
             worker.sink.clearRetainingCapacity();
             updated = true;
         }
 
-        if (changed.pid == 0) {
-            return if (updated) return .updated else .busy;
-        } else {
-            // Worker finished
+        // Worker finished
+        if (changed.pid != 0) {
             self.worker = null;
             // worker.pipe.close(); // TODO: I think we should close this but I'm getting .BADF
-
-            return .updated;
         }
     }
 
-    fn runWorker(self: *Clown, out: std.fs.File) !void {
+    fn workerMain(self: *Clown, out: std.fs.File) noreturn {
+        self.workerInner(out) catch |err| self.workerSend(out, .{ .err = @errorName(err) }) catch |e| @panic(@errorName(e));
+        out.close();
+        std.posix.exit(0);
+    }
+
+    fn workerInner(self: *Clown, out: std.fs.File) !void {
         while (try self.agent.next()) |tcs| {
             try self.agent.acceptAll(tcs);
-            try self.sendSnapshot(out);
+            try self.workerSend(out, .{ .snapshot = self.makeSnapshot() });
         }
 
-        try self.sendSnapshot(out);
-        out.close();
+        try self.workerSend(out, .{ .snapshot = self.makeSnapshot() });
     }
 
-    fn sendSnapshot(self: *Clown, out: std.fs.File) !void {
+    fn workerSend(_: *Clown, out: std.fs.File, msg: WorkerMsg) !void {
         var buf: [BUF_SIZE]u8 = undefined;
         var bw = out.writer(&buf);
         var jw = tk.serde.json.Writer.init(&bw.interface, .{});
-        try tk.serde.serialize(&jw, self.makeSnapshot());
+        try tk.serde.serialize(&jw, msg);
         try bw.interface.writeAll("\n");
         try bw.interface.flush();
     }

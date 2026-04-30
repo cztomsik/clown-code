@@ -8,7 +8,7 @@ pub const panic = @import("panic.zig").panic;
 
 const Config = struct {
     ai_client: tk.ai.ClientConfig = .{
-        .base_url = "http://localhost:8080",
+        .base_url = "http://127.0.0.1:8080",
     },
 };
 

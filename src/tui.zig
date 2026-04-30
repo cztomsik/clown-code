@@ -45,9 +45,8 @@ pub const Tui = struct {
                     else => self.ctx.pending_key = k,
                 },
                 .idle => {
-                    if (try self.clown.tick() == .updated) {
-                        self.ctx.next_tick = .render;
-                    }
+                    try self.clown.tick();
+                    self.ctx.next_tick = .clear;
                 },
             }
         }
@@ -142,7 +141,12 @@ pub const Tui = struct {
 
                 if (self.clown.busy()) {
                     g.spacer(1);
-                    g.text("Processing...");
+                    g.text(g.ctx.fmt("Processing... {d}s", .{self.clown.elapsed()}));
+                }
+
+                if (self.clown.err) |e| {
+                    g.spacer(1);
+                    g.text(g.ctx.fmt("Error: {s}", .{e}));
                 }
 
                 const layout = g.container().layout;
