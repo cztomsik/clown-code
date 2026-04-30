@@ -161,8 +161,8 @@ pub const Clown = struct {
 
     fn stop(self: *Clown) void {
         const worker = self.worker orelse return;
-        worker.pipe.close();
         std.posix.kill(worker.pid, std.posix.SIG.KILL) catch {};
+        worker.pipe.close();
         self.worker = null;
     }
 
