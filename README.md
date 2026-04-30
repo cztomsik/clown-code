@@ -8,12 +8,27 @@ It's a self-hosted, privacy-friendly alternative to tools like Cursor or GitHub 
 
 ## Quick Start
 
-```bash
-# Start llama.cpp server (pick a model)
-# llama-server -hf unsloth/Qwen3.6-27B-GGUF:Q8_0 --mlock --spec-default --offline
-# llama-server -hf ggml-org/gemma-4-31B-it-GGUF:Q8_0 --mlock --spec-default --offline
-# llama-server -hf unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL --mlock --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0.00 --chat-template-kwargs '{"preserve_thinking": true}' --spec-default --offline
+Run a llama.cpp server, either directly (`llama-server -hf unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL --spec-default --chat-template-kwargs '{"preserve_thinking": false}'`) or using a preset file (`llama-server --models-preset ~/llama.ini`):
 
+```ini
+[*]
+jinja = 1
+spec-default = 1
+
+[default]
+hf = unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL
+temp = 0.6
+top-p = 0.95
+top-k = 20
+min-p = 0.00
+chat-template-kwargs  = {"preserve_thinking": false}
+reasoning-budget = 1800
+reasoning-budget-message = ... Considering the limited time by the user, I have to give the solution based on the thinking directly now. </think> 
+```
+
+Then build & run the app:
+
+```bash
 zig build run
 ```
 
