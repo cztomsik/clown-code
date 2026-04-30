@@ -4,6 +4,8 @@ const tools = @import("tools.zig");
 const Clown = @import("model.zig").Clown;
 const Tui = @import("tui.zig").Tui;
 
+pub const panic = @import("panic.zig").panic;
+
 const Config = struct {
     ai_client: tk.ai.ClientConfig = .{
         .base_url = "http://localhost:8080",
