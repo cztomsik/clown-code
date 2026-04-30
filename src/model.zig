@@ -106,7 +106,7 @@ pub const Clown = struct {
         defer file.close();
 
         const contents = try file.readToEndAlloc(self.agent.arena, 1024 * 1024);
-        self.loadSnapshot(try std.json.parseFromSliceLeaky(Snapshot, self.agent.arena, contents, .{}));
+        self.loadSnapshot(try std.json.parseFromSliceLeaky(Snapshot, self.agent.arena, contents, .{ .allocate = .alloc_always }));
     }
 
     pub fn @"continue"(self: *Clown) !void {
@@ -143,7 +143,7 @@ pub const Clown = struct {
         const pid = try std.posix.fork();
         if (pid == 0) {
             std.posix.close(pipe[0]); // close read
-            self.runWorker(.{ .handle = pipe[1] }) catch std.process.exit(1);
+            self.runWorker(.{ .handle = pipe[1] }) catch |e| std.debug.panic("error: {s}", .{@errorName(e)});
             std.process.exit(0);
         } else {
             std.posix.close(pipe[1]); // close write & set non-blocking
@@ -189,7 +189,7 @@ pub const Clown = struct {
         if (std.mem.lastIndexOf(u8, data, "\n")) |last_nl| {
             const prev_nl = std.mem.lastIndexOf(u8, data[0..last_nl], "\n");
             const line = data[if (prev_nl) |p| p + 1 else 0..last_nl];
-            const res = try std.json.parseFromSliceLeaky(Snapshot, self.agent.arena, line, .{});
+            const res = try std.json.parseFromSliceLeaky(Snapshot, self.agent.arena, line, .{ .allocate = .alloc_always });
             self.loadSnapshot(res);
 
             worker.sink.clearRetainingCapacity();
