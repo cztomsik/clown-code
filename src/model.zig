@@ -30,7 +30,7 @@ pub const Clown = struct {
     worker: ?Worker = null,
 
     pub fn init(gpa: std.mem.Allocator, agr: *tk.ai.AgentRuntime) !Clown {
-        var agent = try agr.createAgent(gpa, .{ .model = "", .max_completion_tokens = 32 * 1024 });
+        var agent = try agr.createAgent(gpa, .{ .model = "default", .max_completion_tokens = 32 * 1024 });
         errdefer agent.deinit();
 
         // We do this later because we want it to be scoped with agent.arena.
@@ -186,12 +186,13 @@ pub const Clown = struct {
         // Check for any updates
         var updated = false;
         const data = worker.sink.items;
-        if (std.mem.lastIndexOf(u8, data, "\n")) |i| {
-            const line = data[std.mem.lastIndexOf(u8, data[0..i], "\n") orelse 0 .. i];
+        if (std.mem.lastIndexOf(u8, data, "\n")) |last_nl| {
+            const prev_nl = std.mem.lastIndexOf(u8, data[0..last_nl], "\n");
+            const line = data[if (prev_nl) |p| p + 1 else 0..last_nl];
             const res = try std.json.parseFromSliceLeaky(Snapshot, self.agent.arena, line, .{});
             self.loadSnapshot(res);
 
-            // TODO: we should also clear & rebase our sink
+            worker.sink.clearRetainingCapacity();
             updated = true;
         }
 
