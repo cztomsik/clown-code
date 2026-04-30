@@ -41,16 +41,7 @@ pub const Tui = struct {
 
                         try self.clown.send(input);
                     },
-                    .scroll_up => {
-                        self.scroll += 1;
-                        if (self.scroll < 0) self.scroll = 0;
-                    },
-                    .scroll_down => {
-                        if (self.scroll > 0) {
-                            self.scroll -= 1;
-                        }
-                        // Reaching 0 from manual scroll keeps it at 0 (auto-scroll)
-                    },
+                    .scroll_up, .scroll_down => self.scroll = @max(0, if (k == .scroll_up) self.scroll + 1 else self.scroll - 1),
                     else => self.ctx.pending_key = k,
                 },
                 .idle => {
