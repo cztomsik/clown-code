@@ -138,17 +138,24 @@ pub fn runCommand(arena: std.mem.Allocator, args: RunCommandArgs) ![]const u8 {
 pub const ScrapeArgs = struct {
     url: []const u8,
     query_selector: ?[]const u8,
+    req_delay_ms: i64 = 2_000,
 };
 
 /// Scrape a web page and convert it to markdown. Optionally filter to a CSS selector.
 pub fn scrape(http_client: *tk.http.Client, arena: std.mem.Allocator, args: ScrapeArgs) ![]const u8 {
-    const res = try http_client.request(arena, .{ .url = args.url });
+    const H = struct {
+        var last_req: i64 = 0;
+    };
+    const now = std.time.milliTimestamp();
+    const next = H.last_req + args.req_delay_ms;
+    if (next > now) std.Thread.sleep(@as(u64, @intCast(next - now)));
+    H.last_req = now;
 
+    const res = try http_client.request(arena, .{ .url = args.url });
     const doc = try tk.dom.Document.parseFromSlice(arena, res.body);
     defer doc.deinit();
 
     var node = &doc.node;
-
     if (args.query_selector) |sel| {
         if (try doc.querySelector(sel)) |el| node = &el.node;
     }
