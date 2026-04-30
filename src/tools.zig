@@ -108,6 +108,7 @@ pub fn runCommand(arena: std.mem.Allocator, args: RunCommandArgs) ![]const u8 {
         .allocator = arena,
         .argv = &.{ "sh", "-c", args.command },
         .cwd = args.cwd,
+        .max_output_bytes = 1024 * 1024,
     });
 
     const exit_code = switch (res.term) {
