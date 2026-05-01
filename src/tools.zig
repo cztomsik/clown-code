@@ -3,6 +3,9 @@ const tk = @import("tokamak");
 const Clown = @import("model.zig").Clown;
 const TodoItem = @import("model.zig").TodoItem;
 
+// Constants
+const MAX_READ_SIZE = 2 * 1024 * 1024;
+
 // Standard file system and shell tools for AI agents.
 //
 // NOTE: tk.ai.AgentTool handles JSON schema generation, input validation, and
@@ -17,15 +20,16 @@ pub fn readFile(arena: std.mem.Allocator, args: ReadFileArgs) ![]const u8 {
     const file = try std.fs.cwd().openFile(args.path, .{});
     defer file.close();
 
-    const raw = try file.readToEndAlloc(arena, 1024 * 1024);
+    const raw = try file.readToEndAlloc(arena, MAX_READ_SIZE);
+    if (!std.unicode.utf8ValidateSlice(raw)) return error.InvalidUtf8;
 
-    // Split into lines and format as "N: line"
+    // Split into lines and format as "N:content"
     var lines = std.mem.splitScalar(u8, raw, '\n');
     var out = try std.ArrayList(u8).initCapacity(arena, raw.len);
     defer out.deinit(arena);
     var line_num: usize = 1;
     while (lines.next()) |line| {
-        const formatted = try std.fmt.allocPrint(arena, "{d}: {s}\n", .{ line_num, line });
+        const formatted = try std.fmt.allocPrint(arena, "{d}:{s}\n", .{ line_num, line });
         try out.appendSlice(arena, formatted);
         line_num += 1;
     }
@@ -68,7 +72,7 @@ pub fn editFile(arena: std.mem.Allocator, args: EditFileArgs) ![]const u8 {
     // Read current content (without line numbers)
     const file = try std.fs.cwd().openFile(args.path, .{});
     defer file.close();
-    const content = try file.readToEndAlloc(arena, 1024 * 1024);
+    const content = try file.readToEndAlloc(arena, MAX_READ_SIZE);
     var new_content = content;
 
     if (!args.replace_all) {
@@ -108,8 +112,10 @@ pub fn runCommand(arena: std.mem.Allocator, args: RunCommandArgs) ![]const u8 {
         .allocator = arena,
         .argv = &.{ "sh", "-c", args.command },
         .cwd = args.cwd,
-        .max_output_bytes = 1024 * 1024,
+        .max_output_bytes = MAX_READ_SIZE,
     });
+    if (!std.unicode.utf8ValidateSlice(res.stdout)) return error.InvalidUtf8;
+    if (!std.unicode.utf8ValidateSlice(res.stderr)) return error.InvalidUtf8;
 
     const exit_code = switch (res.term) {
         .Exited => |code| code,
