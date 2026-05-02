@@ -189,7 +189,6 @@ pub const Clown = struct {
         }
 
         // Check for any updates
-        var updated = false;
         const data = worker.sink.items;
         if (std.mem.lastIndexOf(u8, data, "\n")) |last_nl| {
             const prev_nl = std.mem.lastIndexOf(u8, data[0..last_nl], "\n");
@@ -202,7 +201,6 @@ pub const Clown = struct {
             }
 
             worker.sink.clearRetainingCapacity();
-            updated = true;
         }
 
         // Worker finished
