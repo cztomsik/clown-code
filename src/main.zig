@@ -6,6 +6,10 @@ const Tui = @import("tui.zig").Tui;
 
 pub const panic = @import("panic.zig").panic;
 
+pub const std_options: std.Options = .{
+    .logFn = @import("log.zig").debugLog,
+};
+
 const Config = struct {
     ai_client: tk.ai.ClientConfig = .{
         .base_url = "http://127.0.0.1:8080",

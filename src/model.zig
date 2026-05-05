@@ -218,7 +218,10 @@ pub const Clown = struct {
     }
 
     fn workerMain(self: *Clown, out: std.fs.File) noreturn {
-        self.workerInner(out) catch |err| self.workerSend(out, .{ .err = @errorName(err) }) catch |e| @panic(@errorName(e));
+        self.workerInner(out) catch |err| {
+            std.log.err("worker error: {s}", .{@errorName(err)});
+            _ = self.workerSend(out, .{ .err = @errorName(err) }) catch |e| @panic(@errorName(e));
+        };
         out.close();
         std.posix.exit(0);
     }
