@@ -58,7 +58,14 @@ pub const Clown = struct {
             else => return err,
         };
         defer file.close();
-        return file.readToEndAlloc(arena, 1024 * 1024);
+        const base = try file.readToEndAlloc(arena, 1024 * 1024);
+        const cwd_path = try std.fs.cwd().realpathAlloc(arena, ".");
+
+        return try std.fmt.allocPrint(
+            arena,
+            "{s}\n\nCurrent working directory: {s}\n",
+            .{ base, cwd_path },
+        );
     }
 
     pub fn clear(self: *Clown) void {
