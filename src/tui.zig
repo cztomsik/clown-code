@@ -106,7 +106,7 @@ pub const Tui = struct {
     }
 
     fn messages(self: *Tui, ui: tk.tui.Builder) void {
-        if (ui.stack(-5)) |p| {
+        if (ui.stack(-8)) |p| {
             p.frame.* = p.frame.pad(.{ 0, 2, 0, 2 });
 
             if (p.grid(&.{ 10, -1 }, -1)) |g| {
@@ -172,9 +172,9 @@ pub const Tui = struct {
                 r.num(self.clown.agent.total_tokens);
             }
 
-            if (p.stack(1)) |r| {
+            if (p.stack(3)) |r| {
                 r.frame.fill(ui.ctx.theme.base1);
-                r.textInput(&self.buf, &self.msg_len);
+                r.textArea(&self.buf, &self.msg_len, 3);
             }
         }
     }
