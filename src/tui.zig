@@ -6,7 +6,7 @@ pub const Tui = struct {
     ctx: *tk.tui.Context,
     clown: *Clown,
     scroll: i32 = 0, // 0 means auto-scroll to bottom
-    buf: [512]u8 = undefined,
+    buf: [4096]u8 = undefined,
     msg_len: usize = 0,
     last_esc: i64 = 0,
     flash: ?[]const u8 = null,
