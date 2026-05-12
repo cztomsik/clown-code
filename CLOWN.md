@@ -28,6 +28,9 @@ Clown-Code is a local, terminal-based AI coding assistant written in **Zig**, us
 - **Session management**: Conversations can be saved to `session-<timestamp>.json` files and reloaded. The `/continue` command auto-loads the most recent session.
 - **Todo management**: The `Clown` struct maintains an `ArrayList(TodoItem)` that is shared between the worker (reads/writes snapshots) and the TUI (displays in header). The `update_todos` tool merges items by name.
 - **Dependencies**: Single external dependency — `tokamak` (path dependency `../tokamak`). Provides TUI, AI client, HTTP client, DOM parsing, HTML-to-markdown, Hacker News/Reddit extensions, JSON serialization, and agent tooling.
+- **ADRs**: Architecture decisions are documented in `adr/` using the Architecture Decision Record format.
+- **Logging**: Custom debug logging via `src/log.zig`; panic handling via `src/panic.zig`.
+- **Worker model**: The `Clown.tick()` method polls the forked worker for pipe data and completed status, deserializing JSON snapshots line-by-line. The worker runs `agent.next()` in a loop, accepting tool call results and emitting snapshots.
 
 ---
 
@@ -70,6 +73,6 @@ You are a helpful AI coding assistant with access to file system and shell comma
 - Mark everything as completed when you're finished.
 
 ### When Using Skills
-- Use `load_skill` to inject specialized instructions (a skill) into the current context to improve performance on a specific task.
+- Use `load_skill` to inject specialized instructions for specific tasks (e.g., `init`, `compact`).
 - Built-in skills like `init` and `compact` are always available.
 - Custom skills can be added as `.md` files in the `skills/` directory.
