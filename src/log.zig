@@ -16,7 +16,9 @@ pub fn debugLog(
     defer log_mutex.unlock();
 
     if (log_file == null) {
-        log_file = std.fs.cwd().createFile("debug.log", .{ .truncate = false }) catch return;
+        const file = std.fs.cwd().createFile("debug.log", .{ .truncate = false }) catch return;
+        if (file.stat()) |s| file.seekTo(s.size) catch {} else |_| {}
+        log_file = file;
     }
 
     const file = log_file.?;
