@@ -1,6 +1,6 @@
 # Init Skill
 
-Create a new `CLOWN.md` file in the current directory using the `file_write` tool. The file should contain two parts:
+Create a new `CLOWN.md` file in the current directory using the `write_file` tool. The file should contain two parts:
 
 ## Part 1: Project Info (dynamic)
 

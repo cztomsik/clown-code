@@ -242,10 +242,10 @@ pub fn loadSkill(arena: std.mem.Allocator, args: LoadSkillArgs) ![]const u8 {
 
 /// Register all standard tools with an AgentToolbox.
 pub fn registerAllTools(toolbox: *tk.ai.AgentToolbox) !void {
-    try toolbox.addTool("todos_update", "Create/update todo item(s)", updateTodos);
-    try toolbox.addTool("file_read", "Read the contents of a file", readFile);
-    try toolbox.addTool("file_write", "Write content to a file, creating directories if needed", writeFile);
-    try toolbox.addTool("file_edit", "Edit a file by replacing specific content. Set replace_all=true to replace all occurrences", editFile);
+    try toolbox.addTool("update_todos", "Create/update todo item(s)", updateTodos);
+    try toolbox.addTool("read_file", "Read the contents of a file", readFile);
+    try toolbox.addTool("write_file", "Write content to a file, creating directories if needed", writeFile);
+    try toolbox.addTool("edit_file", "Edit a file by replacing specific content. Set replace_all=true to replace all occurrences", editFile);
     try toolbox.addTool("run_command", "Execute a shell command and return its output", runCommand);
     try toolbox.addTool("load_skill", "Load a set of specialized instructions (a skill) into the current context to improve performance on a specific task.", loadSkill);
     try toolbox.addTool("scrape", "Scrape a web page and convert it to markdown. Optionally filter to a CSS selector", scrape);

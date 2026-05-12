@@ -44,10 +44,10 @@ zig build run
 
 ## Available tools
 
-- **todos_update** - Create or update todo item(s)
-- **file_read** - Read the contents of a file
-- **file_write** - Write content to a file, creating directories if needed
-- **file_edit** - Edit a file by replacing specific content
+- **update_todos** - Create or update todo item(s)
+- **read_file** - Read the contents of a file
+- **write_file** - Write content to a file, creating directories if needed
+- **edit_file** - Edit a file by replacing specific content
 - **run_command** - Execute a shell command and return its output
 - **scrape** - Scrape a web page and convert it to markdown
 - **hacker_news** - Get stories from Hacker News
