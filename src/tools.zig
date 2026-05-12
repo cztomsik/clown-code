@@ -13,19 +13,25 @@ const MAX_READ_SIZE = 2 * 1024 * 1024;
 
 pub const ReadFileArgs = struct {
     path: []const u8,
+    raw: bool = false,
 };
 
 /// Read the contents of a file.
+/// If `raw` is false (default), output is prefixed with line numbers (e.g., "1:content").
 pub fn readFile(arena: std.mem.Allocator, args: ReadFileArgs) ![]const u8 {
     const file = try std.fs.cwd().openFile(args.path, .{});
     defer file.close();
 
-    const raw = try file.readToEndAlloc(arena, MAX_READ_SIZE);
-    if (!std.unicode.utf8ValidateSlice(raw)) return error.InvalidUtf8;
+    const contents = try file.readToEndAlloc(arena, MAX_READ_SIZE);
+    if (!std.unicode.utf8ValidateSlice(contents)) return error.InvalidUtf8;
+
+    if (args.raw) {
+        return contents;
+    }
 
     // Split into lines and format as "N:content"
-    var lines = std.mem.splitScalar(u8, raw, '\n');
-    var out = try std.ArrayList(u8).initCapacity(arena, raw.len);
+    var lines = std.mem.splitScalar(u8, contents, '\n');
+    var out = try std.ArrayList(u8).initCapacity(arena, contents.len);
     defer out.deinit(arena);
     var line_num: usize = 1;
     while (lines.next()) |line| {
