@@ -59,12 +59,14 @@ pub const Clown = struct {
         };
         defer file.close();
         const base = try file.readToEndAlloc(arena, 1024 * 1024);
+
+        const today: tk.time.Date = .today();
         const cwd_path = try std.fs.cwd().realpathAlloc(arena, ".");
 
         return try std.fmt.allocPrint(
             arena,
-            "{s}\n\nCurrent working directory: {s}\n",
-            .{ base, cwd_path },
+            "{s}\n\nCurrent date: {f}\nCurrent working directory: {s}\n",
+            .{ base, today, cwd_path },
         );
     }
 
