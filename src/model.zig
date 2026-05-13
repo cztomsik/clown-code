@@ -97,8 +97,36 @@ pub const Clown = struct {
     }
 
     pub fn compact(self: *Clown) !void {
-        try self.send("Summarize the current conversation context to reduce token usage.");
-        // TODO: somehow wait for the result and remove intermediate messages - or maybe we could add a builtin tool?
+        // Step 1: Ask the model to summarize the conversation
+        try self.send(
+            \\Please provide a concise summary of the conversation so far.
+            \\Include:
+            \\- Current state of any ongoing tasks
+            \\- Key decisions and their rationale
+            \\- Important file paths and code snippets
+            \\- Anything that is absolutely neccessary in order to continue the work
+            \\Keep it under 2000 characters. After providing the summary, stop.
+        );
+
+        // Step 2: Wait for the worker to finish (TODO: This will block the UI currently)
+        while (self.busy()) {
+            try self.tick();
+        } else {
+            if (self.agent.messages.getLast().role != .assistant) return;
+        }
+
+        // Step 3: Replace the history
+        const summary = self.agent.messages.getLast().content.?.text;
+        const fmt =
+            \\The conversation history has been compacted to save context space. Acknowledge this and ask user what they want to do next.
+            \\
+            \\<compacted summary>
+            \\{s}
+            \\</compacted summary>
+        ;
+
+        self.clear();
+        try self.send(try std.fmt.allocPrint(self.agent.arena, fmt, .{summary}));
     }
 
     pub fn send(self: *Clown, msg: []const u8) !void {
