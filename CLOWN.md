@@ -14,7 +14,7 @@ Clown-Code is a local, terminal-based AI coding assistant written in **Zig**, us
 |------|---------|
 | `src/main.zig` | Application entry point. Configures the tokamak app with `Config` and `App`, wires up the toolbox init hook, and launches the TUI. |
 | `src/model.zig` | Core `Clown` struct — manages the AI agent lifecycle (init, send, retry, save, load, continue), background worker process for streaming agent responses, snapshot serialization (messages, todos, tokens) via a named pipe, and system prompt loading from `CLOWN.md`. |
-| `src/tools.zig` | Tool implementations registered with the AI agent's toolbox: `read_file`, `write_file`, `edit_file`, `run_command`, `scrape`, `hacker_news`, `reddit`, `update_todos`, `load_skill`. Each tool uses tokamak's `AgentTool` for JSON schema generation and input validation. |
+| `src/tools.zig` | Tool implementations registered with the AI agent's toolbox: `read_file`, `write_file`, `edit_file`, `run_command`, `scrape`, `hacker_news`, `reddit`, `update_todos`, `load_skill`, `advisor`. Each tool uses tokamak's `AgentTool` for JSON schema generation and input validation. |
 | `src/tui.zig` | Terminal UI implementation using tokamak. Renders a header (banner + collapsible todos), scrollable message area (user/assistant/tool messages with tool call details), and footer (user input + token count). Handles commands (`/clear`, `/init`, `/retry`, `/save`, `/load`, `/continue`, `/exit`, `/quit`, `/help`) and keyboard input. |
 | `src/skills/init.md` | Skill definition for the `/init` command — instructs the AI to explore the project and create a `CLOWN.md` with project-specific context plus the canonical system prompt. |
 | `src/skills/compact.md` | Skill definition for context compaction — summarize conversation history to reduce token usage. |
@@ -28,6 +28,6 @@ Clown-Code is a local, terminal-based AI coding assistant written in **Zig**, us
 - **Session management**: Conversations can be saved to `session-<timestamp>.json` files and reloaded. The `/continue` command auto-loads the most recent session.
 - **Todo management**: The `Clown` struct maintains an `ArrayList(TodoItem)` that is shared between the worker (reads/writes snapshots) and the TUI (displays in header). The `update_todos` tool merges items by name.
 - **Dependencies**: Single external dependency — `tokamak` (path dependency `../tokamak`). Provides TUI, AI client, HTTP client, DOM parsing, HTML-to-markdown, Hacker News/Reddit extensions, JSON serialization, and agent tooling.
-- **ADRs**: Architecture decisions are documented in `adr/` using the Architecture Decision Record format.
-- **Logging**: Custom debug logging via `src/log.zig`; panic handling via `src/panic.zig`.
+- **ADR**: Architecture decisions are documented in `adr/` using the Architecture Decision Record format.
+- **Logging**: Custom debug logging via `src/log.zig` (writes to `debug.log`); panic handling via `src/panic.zig` (writes to `error.log`).
 - **Worker model**: The `Clown.tick()` method polls the forked worker for pipe data and completed status, deserializing JSON snapshots line-by-line. The worker runs `agent.next()` in a loop, accepting tool call results and emitting snapshots.

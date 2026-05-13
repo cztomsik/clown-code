@@ -244,6 +244,35 @@ pub fn loadSkill(arena: std.mem.Allocator, args: LoadSkillArgs) ![]const u8 {
     return file.readToEndAlloc(arena, 1024 * 1024);
 }
 
+pub const AdvisorArgs = struct {
+    question: []const u8,
+    model: []const u8 = "advisor",
+};
+
+/// Consult a larger model for hard problems.
+pub fn advisor(ai_client: *tk.ai.Client, arena: std.mem.Allocator, args: AdvisorArgs) ![]const u8 {
+    const res = try ai_client.createChatCompletion(arena, .{
+        .model = args.model,
+        .max_completion_tokens = 32 * 1024,
+        .messages = &.{
+            .{
+                .role = .system,
+                .content = .{ .text = "You are a senior software engineer advisor. Provide concise, expert answers to coding questions. Be direct and practical." },
+            },
+            .{
+                .role = .user,
+                .content = .{ .text = args.question },
+            },
+        },
+    });
+
+    if (res.singleChoice()) |ch| {
+        if (ch.text()) |answer| return answer;
+    }
+
+    return error.InvalidCompletion;
+}
+
 /// Register all standard tools with an AgentToolbox.
 pub fn registerAllTools(toolbox: *tk.ai.AgentToolbox) !void {
     try toolbox.addTool("update_todos", "Create/update todo item(s)", updateTodos);
@@ -255,6 +284,7 @@ pub fn registerAllTools(toolbox: *tk.ai.AgentToolbox) !void {
     try toolbox.addTool("scrape", "Scrape a web page and convert it to markdown. Optionally filter to a CSS selector", scrape);
     try toolbox.addTool("hacker_news", "Get stories from Hacker News", hackerNews);
     try toolbox.addTool("reddit", "Get posts from a Reddit subreddit", reddit);
+    try toolbox.addTool("advisor", "Consult a larger, more capable model for hard problems", advisor);
 }
 
 test runCommand {
