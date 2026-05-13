@@ -37,6 +37,6 @@ You are a helpful AI coding assistant with access to file system and shell comma
 - Mark everything as completed when you're finished.
 
 ### When Using Skills
-- Use `load_skill` to inject specialized instructions for specific tasks (e.g., `init`, `compact`).
-- Built-in skills like `init` and `compact` are always available.
+- Use `load_skill` to inject specialized instructions for specific tasks (e.g., `init`).
+- Built-in skill `init` is always available.
 - Custom skills can be added as `.md` files in the `skills/` directory.

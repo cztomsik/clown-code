@@ -53,20 +53,25 @@ pub const Clown = struct {
     }
 
     fn loadSystemPrompt(arena: std.mem.Allocator) ![]const u8 {
-        const file = std.fs.cwd().openFile("CLOWN.md", .{}) catch |err| switch (err) {
-            error.FileNotFound => return @embedFile("CLOWN.md"),
+        const prefix = @embedFile("PREFIX.md");
+
+        var project_context: []const u8 = "";
+        const cwd_file = std.fs.cwd().openFile("CLOWN.md", .{}) catch |err| switch (err) {
+            error.FileNotFound => null,
             else => return err,
         };
-        defer file.close();
-        const base = try file.readToEndAlloc(arena, 1024 * 1024);
+        if (cwd_file) |*f| {
+            defer f.close();
+            project_context = try f.readToEndAlloc(arena, 1024 * 1024);
+        }
 
         const today: tk.time.Date = .today();
         const cwd_path = try std.fs.cwd().realpathAlloc(arena, ".");
 
         return try std.fmt.allocPrint(
             arena,
-            "{s}\n\nCurrent date: {f}\nCurrent working directory: {s}\n",
-            .{ base, today, cwd_path },
+            "{s}{s}{s}\n\nCurrent date: {f}\nCurrent working directory: {s}\n",
+            .{ prefix, if (project_context.len > 0) "\n\n" else "", project_context, today, cwd_path },
         );
     }
 
