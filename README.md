@@ -1,14 +1,26 @@
 # Clown-Code: AI Coding Assistant
 
-A local, terminal-based AI coding assistant written in Zig, using the tokamak TUI framework.
+> Let's be honest - this is a tool created **out of necessity**. Big boys are
+> doing changes all the time and I'm tired of it. I want to 100% focus on my
+> work and I need a reliable tool for that. I don't expect this to be useful for
+> anybody else except me. I am also likely to reject any feature-requests,
+> and/or pull requests for anything other than fixing bugs. You should fork
+> this, make your own changes, and keep it for yourself. Have fun.
 
-Clown-Code connects to a local LLM (via llama.cpp) and provides the AI with tools to interact with your filesystem and shell — including file read/write/edit, todo management, shell commands, web scraping, and fetching from Hacker News and Reddit.
 
-It's a self-hosted, privacy-friendly alternative to tools like Cursor or GitHub Copilot, running entirely locally with an open-source model.
+A local, terminal-based AI coding assistant written in Zig, using the tokamak
+TUI framework.
+
+Clown-Code connects to a local LLM (via llama.cpp) and provides the AI with
+tools to interact with your filesystem and shell.
+
+It's a self-hosted, privacy-friendly alternative to tools like Codex or
+Gemini-CLI, running entirely locally with an open-source model.
 
 ## Quick Start
 
-Run a llama.cpp server, either directly (`llama-server -hf unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_XL --spec-default --chat-template-kwargs '{"preserve_thinking": false}'`) or using a preset file (`llama-server --models-preset ~/llama.ini`):
+Run a llama.cpp server using a preset file (`llama-server --models-preset
+~/llama.ini`):
 
 ```ini
 [*]
@@ -22,8 +34,15 @@ top-p = 0.95
 top-k = 20
 min-p = 0.00
 chat-template-kwargs  = {"preserve_thinking": false}
-reasoning-budget = 1800
-reasoning-budget-message = ... Considering the limited time by the user, I have to give the solution based on the thinking directly now. </think> 
+reasoning-budget = 1000
+reasoning-budget-message = ... Considering the limited time by the user, I have to give the solution based on the thinking directly now. </think>
+
+[advisor]
+hf = unsloth/Qwen3.6-27B-GGUF:UD-Q4_K_XL
+temp = 0.4
+top-p = 0.95
+top-k = 20
+min-p = 0.00
 ```
 
 Then build & run the app:
@@ -44,13 +63,4 @@ zig build run
 
 ## Available tools
 
-- **update_todos** - Create or update todo item(s)
-- **read_file** - Read the contents of a file
-- **write_file** - Write content to a file, creating directories if needed
-- **edit_file** - Edit a file by replacing specific content
-- **run_command** - Execute a shell command and return its output
-- **scrape** - Scrape a web page and convert it to markdown
-- **hacker_news** - Get stories from Hacker News
-- **reddit** - Get posts from a Reddit subreddit
-
-See `src/tools.zig` for more.
+See `src/tools.zig`.
