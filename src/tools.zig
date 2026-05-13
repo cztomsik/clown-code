@@ -232,11 +232,9 @@ pub const LoadSkillArgs = struct {
 };
 
 /// Load a skill file and inject its contents as system instructions into the agent's context.
-/// Builtin skills (init, compact) take precedence over user-provided skills.
-/// The `init` skill is concatenated with the canonical system prompt (CLOWN.md) at compile time.
+/// Builtin skills (init) take precedence over user-provided skills.
 pub fn loadSkill(arena: std.mem.Allocator, args: LoadSkillArgs) ![]const u8 {
-    if (std.mem.eql(u8, args.skill_name, "init")) return @embedFile("skills/init.md") ++ @embedFile("CLOWN.md");
-    if (std.mem.eql(u8, args.skill_name, "compact")) return @embedFile("skills/compact.md");
+    if (std.mem.eql(u8, args.skill_name, "init")) return @embedFile("skills/init.md");
 
     // TODO: Check for path traversal
     const path = try std.fmt.allocPrint(arena, "skills/{s}.md", .{args.skill_name});
