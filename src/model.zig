@@ -77,8 +77,28 @@ pub const Clown = struct {
 
     pub fn clear(self: *Clown) void {
         self.stop();
-        self.agent.messages.clearRetainingCapacity();
         self.todos.clearRetainingCapacity();
+        self.agent.messages.shrinkRetainingCapacity(1); // Keep the system msg
+    }
+
+    pub fn clearTools(self: *Clown) void {
+        self.stop();
+
+        // Remove all tool results but keep system, user, and assistant messages
+        var i: usize = 0;
+        for (self.agent.messages.items) |msg| {
+            if (msg.role != .tool) {
+                self.agent.messages.items[i] = msg;
+                i += 1;
+            }
+        }
+
+        self.agent.messages.shrinkRetainingCapacity(i);
+    }
+
+    pub fn compact(self: *Clown) !void {
+        try self.send("Summarize the current conversation context to reduce token usage.");
+        // TODO: somehow wait for the result and remove intermediate messages - or maybe we could add a builtin tool?
     }
 
     pub fn send(self: *Clown, msg: []const u8) !void {

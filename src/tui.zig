@@ -182,6 +182,8 @@ pub const Tui = struct {
     fn handleCommand(self: *Tui, cmd: []const u8, arg: []const u8) !bool {
         if (std.mem.eql(u8, cmd, "exit") or std.mem.eql(u8, cmd, "quit")) return false;
         if (std.mem.eql(u8, cmd, "clear")) self.clown.clear();
+        if (std.mem.eql(u8, cmd, "clear-tools")) self.clown.clearTools();
+        if (std.mem.eql(u8, cmd, "compact")) try self.clown.compact();
         if (std.mem.eql(u8, cmd, "init")) try self.clown.send("Could you /init this project?");
         if (std.mem.eql(u8, cmd, "retry")) try self.clown.retry();
         if (std.mem.eql(u8, cmd, "sudo")) try self.clown.sudo();
@@ -192,15 +194,17 @@ pub const Tui = struct {
         if (std.mem.eql(u8, cmd, "help")) {
             self.flash =
                 \\Available commands:
-                \\ /exit, /quit - Exit the application
-                \\ /clear       - Clear the conversation history
-                \\ /init        - Initialize project context
-                \\ /retry       - Retry the last interaction
-                \\ /sudo        - Retry with "sure" prefix
-                \\ /save        - Save the conversation
-                \\ /load <file> - Load a saved conversation
-                \\ /continue    - Continue the last session
-                \\ /help        - Show this help message
+                \\ /exit, /quit  - Exit the application
+                \\ /clear        - Clear the conversation history
+                \\ /clear-tools  - Remove all tool call results
+                \\ /compact      - Summarize the conversation to reduce token usage
+                \\ /init         - Initialize project context
+                \\ /retry        - Retry the last interaction
+                \\ /sudo         - Retry with "sure" prefix
+                \\ /save         - Save the conversation
+                \\ /load <file>  - Load a saved conversation
+                \\ /continue     - Continue the last session
+                \\ /help         - Show this help message
             ;
         }
 
