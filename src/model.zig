@@ -185,11 +185,11 @@ pub const Clown = struct {
         return self.worker != null;
     }
 
-    pub fn elapsed(self: *const Clown) i64 {
+    pub fn elapsed(self: *Clown) i64 {
         return @divTrunc(std.time.milliTimestamp() - if (self.worker) |w| w.started_at_ms else 0, 1_000);
     }
 
-    fn makeSnapshot(self: *const Clown) Snapshot {
+    fn makeSnapshot(self: *Clown) Snapshot {
         return .{
             .messages = self.agent.messages.items,
             .todos = self.todos.items,
@@ -198,8 +198,9 @@ pub const Clown = struct {
     }
 
     fn loadSnapshot(self: *Clown, snap: Snapshot) void {
-        self.agent.messages.items = snap.messages;
-        self.todos.items = snap.todos;
+        // NOTE: assigning slice is wrong here, not because of pointers, but because we also need to restore capacity
+        self.agent.messages = .fromOwnedSlice(snap.messages);
+        self.todos = .fromOwnedSlice(snap.todos);
         self.agent.total_tokens = snap.total_tokens;
     }
 
