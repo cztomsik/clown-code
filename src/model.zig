@@ -137,8 +137,12 @@ pub const Clown = struct {
         try self.start();
     }
 
+    pub fn undo(self: *Clown) void {
+        _ = self.agent.undo();
+    }
+
     pub fn retry(self: *Clown) !void {
-        self.agent.undo();
+        self.undo();
         try self.start();
     }
 
