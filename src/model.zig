@@ -234,7 +234,7 @@ pub const Clown = struct {
         }
     }
 
-    fn stop(self: *Clown) void {
+    pub fn stop(self: *Clown) void {
         if (self.worker) |w| {
             std.posix.kill(w.pid, std.posix.SIG.KILL) catch {};
             w.pipe.close();

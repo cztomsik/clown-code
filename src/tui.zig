@@ -181,6 +181,7 @@ pub const Tui = struct {
 
     fn handleCommand(self: *Tui, cmd: []const u8, arg: []const u8) !bool {
         if (std.mem.eql(u8, cmd, "exit") or std.mem.eql(u8, cmd, "quit")) return false;
+        if (std.mem.eql(u8, cmd, "stop")) self.clown.stop();
         if (std.mem.eql(u8, cmd, "clear")) self.clown.clear();
         if (std.mem.eql(u8, cmd, "clear-tools")) self.clown.clearTools();
         if (std.mem.eql(u8, cmd, "compact")) try self.clown.compact();
@@ -188,14 +189,15 @@ pub const Tui = struct {
         if (std.mem.eql(u8, cmd, "retry")) try self.clown.retry();
         if (std.mem.eql(u8, cmd, "undo")) self.clown.undo();
         if (std.mem.eql(u8, cmd, "sudo")) try self.clown.sudo();
-        if (std.mem.eql(u8, cmd, "continue")) try self.clown.@"continue"();
         if (std.mem.eql(u8, cmd, "save")) try self.clown.save();
         if (std.mem.eql(u8, cmd, "load")) try self.clown.load(arg);
+        if (std.mem.eql(u8, cmd, "continue")) try self.clown.@"continue"();
 
         if (std.mem.eql(u8, cmd, "help")) {
             self.flash =
                 \\Available commands:
                 \\ /exit, /quit  - Exit the application
+                \\ /stop         - Stop the current AI processing
                 \\ /clear        - Clear the conversation history
                 \\ /clear-tools  - Remove all tool call results
                 \\ /compact      - Summarize the conversation to reduce token usage
