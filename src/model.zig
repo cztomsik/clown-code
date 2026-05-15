@@ -142,7 +142,11 @@ pub const Clown = struct {
     }
 
     pub fn retry(self: *Clown) !void {
-        self.undo();
+        // Strip only assistant/tool messages, keep the user message
+        while (self.agent.messages.getLastOrNull()) |msg| {
+            if (msg.role != .assistant and msg.role != .tool) break;
+            _ = self.agent.messages.pop();
+        }
         try self.start();
     }
 
