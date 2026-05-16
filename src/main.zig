@@ -16,6 +16,18 @@ const Config = struct {
     },
 };
 
+const EnvOverrides = struct {
+    pub fn configure(bundle: *tk.Bundle) void {
+        bundle.provide(std.process.EnvMap, .factory(std.process.getEnvMap));
+        // TODO: This is not perfect (ordering), but it works fine for now.
+        bundle.addInitHook(applyOverrides);
+    }
+
+    fn applyOverrides(config: *Config, env: std.process.EnvMap) void {
+        if (env.get("CLOWN_API")) |url| config.ai_client.base_url = url;
+    }
+};
+
 const App = struct {
     http_client: tk.http.StdClient,
     ai_client: tk.ai.Client,
@@ -31,7 +43,7 @@ const App = struct {
 };
 
 pub fn main() !void {
-    try tk.app.run(Tui.run, &.{ Config, App });
+    try tk.app.run(Tui.run, &.{ Config, EnvOverrides, App });
 }
 
 test {
