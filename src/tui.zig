@@ -9,6 +9,7 @@ pub const Tui = struct {
     buf: [4096]u8 = undefined,
     msg_len: usize = 0,
     last_esc: i64 = 0,
+    last_ctrl_c: i64 = 0,
     flash: ?[]const u8 = null,
 
     pub fn run(self: *Tui) !void {
@@ -18,8 +19,13 @@ pub const Tui = struct {
             switch (try self.ctx.tick()) {
                 .render => |ui| self.render(ui),
                 .key => |k| switch (k) {
-                    // TODO: ctrl_c/esc should clown.stop(), double ctrl_c should break (we could save last key + last time and do both)
-                    .ctrl_c => break,
+                    .ctrl_c => {
+                        const now = std.time.milliTimestamp();
+                        if (now - self.last_ctrl_c < 500) break;
+                        self.clown.stop();
+                        self.flash = "Worker stopped. Press ctrl_c again to exit.";
+                        self.last_ctrl_c = now;
+                    },
                     .escape => {
                         // Double escape within 2s -> clear text buffer
                         const now = std.time.milliTimestamp();
