@@ -31,6 +31,7 @@ pub const Clown = struct {
     agent: tk.ai.Agent,
     todos: std.ArrayList(TodoItem) = .empty,
     worker: ?Worker = null,
+    compacting: bool = false,
     err: ?[]const u8 = null,
 
     pub fn init(gpa: std.mem.Allocator, agr: *tk.ai.AgentRuntime) !Clown {
@@ -98,6 +99,7 @@ pub const Clown = struct {
 
     pub fn compact(self: *Clown) !void {
         // Step 1: Ask the model to summarize the conversation
+        self.compacting = true;
         try self.send(
             \\Please provide a concise summary of the conversation so far.
             \\Include:
@@ -107,16 +109,14 @@ pub const Clown = struct {
             \\- Anything that is absolutely neccessary in order to continue the work
             \\Keep it under 2000 characters. After providing the summary, stop.
         );
+    }
 
-        // Step 2: Wait for the worker to finish (TODO: This will block the UI currently)
-        while (self.busy()) {
-            try self.tick();
-        } else {
-            if (self.agent.messages.getLast().role != .assistant) return;
-        }
+    fn finishCompact(self: *Clown) !void {
+        self.compacting = false;
+        const last = self.agent.messages.getLastOrNull() orelse return;
+        if (last.role != .assistant) return;
 
-        // Step 3: Replace the history
-        const summary = self.agent.messages.getLast().content.?.text;
+        const summary = last.content.?.text;
         const fmt =
             \\The conversation history has been compacted to save context space. Acknowledge this and ask user what they want to do next.
             \\
@@ -278,6 +278,11 @@ pub const Clown = struct {
         if (changed.pid != 0) {
             self.worker = null;
             // worker.pipe.close(); // TODO: I think we should close this but I'm getting .BADF
+
+            if (self.compacting) {
+                try self.finishCompact();
+                return;
+            }
         }
     }
 
