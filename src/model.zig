@@ -11,7 +11,7 @@ pub const TodoItem = struct {
 
 const Worker = struct {
     pid: std.posix.pid_t,
-    pipe: std.fs.File,
+    pipe: std.Io.File,
     sink: std.ArrayList(u8),
     started_at_ms: i64,
 };
@@ -28,24 +28,29 @@ pub const Snapshot = struct {
 };
 
 pub const Clown = struct {
+    io: std.Io,
     agent: tk.ai.Agent,
     todos: std.ArrayList(TodoItem) = .empty,
     worker: ?Worker = null,
     compacting: bool = false,
     err: ?[]const u8 = null,
 
-    pub fn init(gpa: std.mem.Allocator, agr: *tk.ai.AgentRuntime) !Clown {
+    pub fn init(io: std.Io, gpa: std.mem.Allocator, agr: *tk.ai.AgentRuntime) !Clown {
         var agent = try agr.createAgent(gpa, .{ .model = "default", .max_completion_tokens = 32 * 1024 });
         errdefer agent.deinit();
 
         // We do this later because we want it to be scoped with agent.arena.
-        var names = tk.iter.map(agr.toolbox.tools.keyIterator(), tk.meta.deref);
-        agent.options.tools = try tk.iter.collect(agent.arena, &names);
+        // TODO: reconsider if we shouldn't drop tool filtering entirely
+        // TODO: consider implementing our own hashmap with saner API (header.keys are there, but private)
+        var names: std.ArrayList([]const u8) = .empty;
+        var keys = agr.toolbox.tools.keyIterator();
+        while (keys.next()) |key| try names.append(agent.arena, key.*);
+        agent.options.tools = try names.toOwnedSlice(agent.arena);
 
-        const system_prompt = try loadSystemPrompt(agent.arena);
+        const system_prompt = try loadSystemPrompt(io, agent.arena);
         try agent.addMessage(.{ .role = .system, .content = .{ .text = system_prompt } });
 
-        return .{ .agent = agent };
+        return .{ .io = io, .agent = agent };
     }
 
     pub fn deinit(self: *Clown) void {
@@ -53,21 +58,16 @@ pub const Clown = struct {
         self.agent.deinit();
     }
 
-    fn loadSystemPrompt(arena: std.mem.Allocator) ![]const u8 {
+    fn loadSystemPrompt(io: std.Io, arena: std.mem.Allocator) ![]const u8 {
         const prefix = @embedFile("PREFIX.md");
 
-        var project_context: []const u8 = "";
-        const cwd_file = std.fs.cwd().openFile("CLOWN.md", .{}) catch |err| switch (err) {
-            error.FileNotFound => null,
+        const project_context = std.Io.Dir.cwd().readFileAlloc(io, "CLOWN.md", arena, .limited(1024 * 1024)) catch |err| switch (err) {
+            error.FileNotFound => "",
             else => return err,
         };
-        if (cwd_file) |*f| {
-            defer f.close();
-            project_context = try f.readToEndAlloc(arena, 1024 * 1024);
-        }
 
         const today: tk.time.Date = .today();
-        const cwd_path = try std.fs.cwd().realpathAlloc(arena, ".");
+        const cwd_path = try std.Io.Dir.cwd().realPathFileAlloc(io, ".", arena);
 
         return try std.fmt.allocPrint(
             arena,
@@ -113,7 +113,7 @@ pub const Clown = struct {
 
     fn finishCompact(self: *Clown) !void {
         self.compacting = false;
-        const last = self.agent.messages.getLastOrNull() orelse return;
+        const last = self.agent.messages.getLast() orelse return;
         if (last.role != .assistant) return;
 
         const summary = last.content.?.text;
@@ -143,7 +143,7 @@ pub const Clown = struct {
 
     pub fn retry(self: *Clown) !void {
         // Strip only assistant/tool messages, keep the user message
-        while (self.agent.messages.getLastOrNull()) |msg| {
+        while (self.agent.messages.getLast()) |msg| {
             if (msg.role != .assistant and msg.role != .tool) break;
             _ = self.agent.messages.pop();
         }
@@ -166,25 +166,23 @@ pub const Clown = struct {
         const filename = try std.fmt.allocPrint(self.agent.arena, "session-{f}.json", .{tk.time.Time.now()});
         defer self.agent.arena.free(filename);
 
-        const file = try std.fs.cwd().createFile(filename, .{});
-        defer file.close();
+        const file = try std.Io.Dir.cwd().createFile(self.io, filename, .{});
+        defer file.close(self.io);
 
-        var fw = file.writer(&.{});
+        var fw = file.writer(self.io, &.{});
         var jw = tk.serde.json.Writer.init(&fw.interface, .{ .whitespace = .indent_2 });
         try tk.serde.serialize(&jw, self.makeSnapshot());
     }
 
     pub fn load(self: *Clown, filename: []const u8) !void {
         self.stop();
-        const file = try std.fs.cwd().openFile(filename, .{});
-        defer file.close();
 
-        const contents = try file.readToEndAlloc(self.agent.arena, 1024 * 1024);
+        const contents = try std.Io.Dir.cwd().readFileAlloc(self.io, filename, self.agent.arena, .limited(1024 * 1024));
         self.loadSnapshot(try std.json.parseFromSliceLeaky(Snapshot, self.agent.arena, contents, .{ .allocate = .alloc_always }));
     }
 
     pub fn @"continue"(self: *Clown) !void {
-        const filename = tk.util.trim(try tools.runCommand(self.agent.arena, .{ .command = "ls -1t session-*.json 2>/dev/null | head -1" }));
+        const filename = tk.util.trim(try tools.runCommand(self.io, self.agent.arena, .{ .command = "ls -1t session-*.json 2>/dev/null | head -1" }));
         if (filename.len == 0) return;
         try self.load(filename);
     }
@@ -194,7 +192,7 @@ pub const Clown = struct {
     }
 
     pub fn elapsed(self: *Clown) i64 {
-        return @divTrunc(std.time.milliTimestamp() - if (self.worker) |w| w.started_at_ms else 0, 1_000);
+        return @divTrunc(tk.time.milliTimestamp() - if (self.worker) |w| w.started_at_ms else 0, 1_000);
     }
 
     fn makeSnapshot(self: *Clown) Snapshot {
@@ -216,32 +214,39 @@ pub const Clown = struct {
         self.stop();
         self.err = null;
 
-        const pipe = try std.posix.pipe();
-        errdefer for (pipe) |fd| std.posix.close(fd);
+        var pipe: [2]c_int = undefined;
+        const pipe_res = std.c.pipe(&pipe);
+        if (pipe_res != 0) return error.PipeFailed;
+        errdefer {
+            _ = std.c.close(pipe[0]);
+            _ = std.c.close(pipe[1]);
+        }
 
-        const pid = try std.posix.fork();
+        const pid = std.c.fork();
+        if (pid == -1) return error.ForkFailed;
         if (pid == 0) {
-            std.posix.close(pipe[0]); // close read
-            self.workerMain(.{ .handle = pipe[1] });
+            _ = std.c.close(pipe[0]); // close read
+            self.workerMain(.{ .handle = pipe[1], .flags = .{ .nonblocking = false } });
             unreachable;
         } else {
-            std.posix.close(pipe[1]); // close write & set non-blocking
-            const flags = try std.posix.fcntl(pipe[0], std.posix.F.GETFL, 0);
-            _ = try std.posix.fcntl(pipe[0], std.posix.F.SETFL, flags | @as(usize, 1 << @bitOffsetOf(std.posix.O, "NONBLOCK")));
+            _ = std.c.close(pipe[1]); // close write & set non-blocking
+            const flags = std.c.fcntl(pipe[0], std.posix.F.GETFL, @as(c_int, 0));
+            if (flags == -1) return error.FnctlFailed;
+            _ = std.c.fcntl(pipe[0], std.posix.F.SETFL, flags | @as(c_int, 1 << @bitOffsetOf(std.posix.O, "NONBLOCK")));
 
             self.worker = .{
                 .pid = pid,
-                .pipe = .{ .handle = pipe[0] },
+                .pipe = .{ .handle = pipe[0], .flags = .{ .nonblocking = true } },
                 .sink = try .initCapacity(self.agent.arena, 1024),
-                .started_at_ms = std.time.milliTimestamp(),
+                .started_at_ms = tk.time.milliTimestamp(),
             };
         }
     }
 
     pub fn stop(self: *Clown) void {
         if (self.worker) |w| {
-            std.posix.kill(w.pid, std.posix.SIG.KILL) catch {};
-            w.pipe.close();
+            _ = std.c.kill(w.pid, std.posix.SIG.KILL);
+            w.pipe.close(self.io);
             self.worker = null;
         }
     }
@@ -249,12 +254,12 @@ pub const Clown = struct {
     pub fn tick(self: *Clown) !void {
         // Check worker status
         const worker = if (self.worker) |*w| w else return;
-        const changed = std.posix.waitpid(worker.pid, std.posix.W.NOHANG);
+        const changed = std.c.waitpid(worker.pid, null, @as(c_int, std.posix.W.NOHANG));
 
         // Read all we can (before we branch)
         while (true) {
             var buf: [BUF_SIZE]u8 = undefined;
-            const n = worker.pipe.read(&buf) catch 0;
+            const n = worker.pipe.readStreaming(self.io, &.{buf[0..]}) catch 0;
             if (n == 0) break;
             try worker.sink.appendSlice(self.agent.arena, buf[0..n]);
         }
@@ -275,7 +280,7 @@ pub const Clown = struct {
         }
 
         // Worker finished
-        if (changed.pid != 0) {
+        if (changed != 0) {
             self.worker = null;
             // worker.pipe.close(); // TODO: I think we should close this but I'm getting .BADF
 
@@ -286,16 +291,16 @@ pub const Clown = struct {
         }
     }
 
-    fn workerMain(self: *Clown, out: std.fs.File) noreturn {
+    fn workerMain(self: *Clown, out: std.Io.File) noreturn {
         self.workerInner(out) catch |err| {
             std.log.err("worker error: {s}", .{@errorName(err)});
             _ = self.workerSend(out, .{ .err = @errorName(err) }) catch |e| @panic(@errorName(e));
         };
-        out.close();
-        std.posix.exit(0);
+        out.close(self.io);
+        std.c.exit(0);
     }
 
-    fn workerInner(self: *Clown, out: std.fs.File) !void {
+    fn workerInner(self: *Clown, out: std.Io.File) !void {
         while (try self.agent.next()) |tcs| {
             try self.agent.acceptAll(tcs);
             try self.workerSend(out, .{ .snapshot = self.makeSnapshot() });
@@ -304,9 +309,9 @@ pub const Clown = struct {
         try self.workerSend(out, .{ .snapshot = self.makeSnapshot() });
     }
 
-    fn workerSend(_: *Clown, out: std.fs.File, msg: WorkerMsg) !void {
+    fn workerSend(self: *Clown, out: std.Io.File, msg: WorkerMsg) !void {
         var buf: [BUF_SIZE]u8 = undefined;
-        var bw = out.writer(&buf);
+        var bw = out.writer(self.io, &buf);
         var jw = tk.serde.json.Writer.init(&bw.interface, .{});
         try tk.serde.serialize(&jw, msg);
         try bw.interface.writeAll("\n");

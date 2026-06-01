@@ -18,11 +18,8 @@ pub const ReadFileArgs = struct {
 
 /// Read the contents of a file.
 /// If `raw` is false (default), output is prefixed with line numbers (e.g., "1:content").
-pub fn readFile(arena: std.mem.Allocator, args: ReadFileArgs) ![]const u8 {
-    const file = try std.fs.cwd().openFile(args.path, .{});
-    defer file.close();
-
-    const contents = try file.readToEndAlloc(arena, MAX_READ_SIZE);
+pub fn readFile(io: std.Io, arena: std.mem.Allocator, args: ReadFileArgs) ![]const u8 {
+    const contents = try std.Io.Dir.cwd().readFileAlloc(io, args.path, arena, .limited(MAX_READ_SIZE));
     if (!std.unicode.utf8ValidateSlice(contents)) return error.InvalidUtf8;
 
     if (args.raw) {
@@ -48,19 +45,16 @@ pub const WriteFileArgs = struct {
 };
 
 /// Write content to a file, creating parent directories if needed.
-pub fn writeFile(_: std.mem.Allocator, args: WriteFileArgs) ![]const u8 {
+pub fn writeFile(io: std.Io, _: std.mem.Allocator, args: WriteFileArgs) ![]const u8 {
     // Create parent directories
     if (std.fs.path.dirname(args.path)) |dir| {
-        std.fs.cwd().makePath(dir) catch |err| switch (err) {
+        std.Io.Dir.cwd().createDirPath(io, dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return err,
         };
     }
 
-    const file = try std.fs.cwd().createFile(args.path, .{});
-    defer file.close();
-
-    try file.writeAll(args.content);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = args.path, .data = args.content });
 
     return "File written successfully";
 }
@@ -74,11 +68,9 @@ pub const EditFileArgs = struct {
 
 /// Edit a file by replacing specific content.
 /// If replace_all is false (default), old_content must exist exactly once.
-pub fn editFile(arena: std.mem.Allocator, args: EditFileArgs) ![]const u8 {
+pub fn editFile(io: std.Io, arena: std.mem.Allocator, args: EditFileArgs) ![]const u8 {
     // Read current content (without line numbers)
-    const file = try std.fs.cwd().openFile(args.path, .{});
-    defer file.close();
-    const content = try file.readToEndAlloc(arena, MAX_READ_SIZE);
+    const content = try std.Io.Dir.cwd().readFileAlloc(io, args.path, arena, .limited(MAX_READ_SIZE));
     var new_content = content;
 
     if (!args.replace_all) {
@@ -99,10 +91,7 @@ pub fn editFile(arena: std.mem.Allocator, args: EditFileArgs) ![]const u8 {
     }
 
     // Write back
-    const write_file = try std.fs.cwd().createFile(args.path, .{});
-    defer write_file.close();
-    try write_file.writeAll(new_content);
-
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = args.path, .data = new_content });
     return "File edited successfully";
 }
 
@@ -113,18 +102,18 @@ pub const RunCommandArgs = struct {
 
 /// Execute a shell command and return its output.
 /// Captures both stdout and stderr. TODO: timeout
-pub fn runCommand(arena: std.mem.Allocator, args: RunCommandArgs) ![]const u8 {
-    const res = try std.process.Child.run(.{
-        .allocator = arena,
+pub fn runCommand(io: std.Io, arena: std.mem.Allocator, args: RunCommandArgs) ![]const u8 {
+    const res = try std.process.run(arena, io, .{
         .argv = &.{ "sh", "-c", args.command },
-        .cwd = args.cwd,
-        .max_output_bytes = MAX_READ_SIZE,
+        .cwd = if (args.cwd) |p| .{ .path = p } else .inherit,
+        .stderr_limit = .limited(MAX_READ_SIZE),
+        .stdout_limit = .limited(MAX_READ_SIZE),
     });
     if (!std.unicode.utf8ValidateSlice(res.stdout)) return error.InvalidUtf8;
     if (!std.unicode.utf8ValidateSlice(res.stderr)) return error.InvalidUtf8;
 
     const exit_code = switch (res.term) {
-        .Exited => |code| code,
+        .exited => |code| code,
         else => return error.CommandFailed,
     };
 
@@ -154,13 +143,13 @@ pub const ScrapeArgs = struct {
 };
 
 /// Scrape a web page and convert it to markdown. Optionally filter to a CSS selector.
-pub fn scrape(http_client: *tk.http.Client, arena: std.mem.Allocator, args: ScrapeArgs) ![]const u8 {
+pub fn scrape(io: std.Io, http_client: *tk.http.Client, arena: std.mem.Allocator, args: ScrapeArgs) ![]const u8 {
     const H = struct {
         var last_req: i64 = 0;
     };
-    const now = std.time.milliTimestamp();
+    const now = tk.time.milliTimestamp();
     const next = H.last_req + args.req_delay_ms;
-    if (next > now) std.Thread.sleep(@as(u64, @intCast(next - now)));
+    if (next > now) io.sleep(.fromMilliseconds(next - now), .awake) catch {};
     H.last_req = now;
 
     const res = try http_client.request(arena, .{ .url = args.url });
@@ -233,15 +222,12 @@ pub const LoadSkillArgs = struct {
 
 /// Load a skill file and inject its contents as system instructions into the agent's context.
 /// Builtin skills (init) take precedence over user-provided skills.
-pub fn loadSkill(arena: std.mem.Allocator, args: LoadSkillArgs) ![]const u8 {
+pub fn loadSkill(io: std.Io, arena: std.mem.Allocator, args: LoadSkillArgs) ![]const u8 {
     if (std.mem.eql(u8, args.skill_name, "init")) return @embedFile("skills/init.md");
 
     // TODO: Check for path traversal
     const path = try std.fmt.allocPrint(arena, "skills/{s}.md", .{args.skill_name});
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-
-    return file.readToEndAlloc(arena, 1024 * 1024);
+    return std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(MAX_READ_SIZE));
 }
 
 pub const AdvisorArgs = struct {
@@ -292,12 +278,12 @@ test runCommand {
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    const res1 = try runCommand(arena, .{ .command = "echo hello" });
+    const res1 = try runCommand(std.testing.io, arena, .{ .command = "echo hello" });
     try std.testing.expectEqualStrings("hello\n", res1);
 
-    const res2 = try runCommand(arena, .{ .command = "find . -name build.zig" });
+    const res2 = try runCommand(std.testing.io, arena, .{ .command = "find . -name build.zig" });
     try std.testing.expect(std.mem.indexOf(u8, res2, "build.zig") != null);
 
-    const res3 = try runCommand(arena, .{ .command = "grep -r \"\\.addTool()\" --include=\"*.zig\" ." });
+    const res3 = try runCommand(std.testing.io, arena, .{ .command = "grep -r \"\\.addTool()\" --include=\"*.zig\" ." });
     try std.testing.expect(std.mem.indexOf(u8, res3, "tools.zig") != null);
 }

@@ -20,7 +20,7 @@ pub const Tui = struct {
                 .render => |ui| self.render(ui),
                 .key => |k| switch (k) {
                     .ctrl_c => {
-                        const now = std.time.milliTimestamp();
+                        const now = tk.time.milliTimestamp();
                         if (now - self.last_ctrl_c < 500) break;
                         self.clown.stop();
                         self.flash = "Worker stopped. Press ctrl_c again to exit.";
@@ -28,7 +28,7 @@ pub const Tui = struct {
                     },
                     .escape => {
                         // Double escape within 2s -> clear text buffer
-                        const now = std.time.milliTimestamp();
+                        const now = tk.time.milliTimestamp();
                         if (now - self.last_esc < 2000) self.msg_len = 0;
                         self.last_esc = now;
                     },

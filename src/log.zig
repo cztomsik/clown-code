@@ -1,5 +1,6 @@
 const std = @import("std");
 const tk = @import("tokamak");
+const io = std.Options.debug_io;
 
 const FILE = "debug.log";
 
@@ -11,15 +12,17 @@ pub fn debugLog(
     args: anytype,
 ) void {
     // NOTE: This could still race but I don't want to waste any more time with legacy I/O
-    const file = std.fs.cwd().openFile(FILE, .{ .mode = .read_write, .lock = .exclusive }) catch std.fs.cwd().createFile(FILE, .{}) catch return;
-    defer file.close();
-
-    file.seekFromEnd(0) catch {};
+    const file = std.Io.Dir.cwd().openFile(io, FILE, .{ .mode = .read_write, .lock = .exclusive }) catch std.Io.Dir.cwd().createFile(io, FILE, .{}) catch return;
+    defer file.close(io);
 
     var buf: [4096]u8 = undefined;
-    var bw = file.writerStreaming(&buf); // NOTE: writer() ignores seeking entirely, and it took me a while to figure it out!
+    var bw = file.writerStreaming(io, &buf); // NOTE: writer() ignores seeking entirely, and it took me a while to figure it out!
     var w = &bw.interface;
     defer w.flush() catch {};
+
+    // Seek to end of file
+    const file_len = file.length(io) catch 0;
+    bw.seekTo(file_len) catch {};
 
     w.print("{f} {s} {s} ", .{ tk.time.Time.now(), @tagName(level), @tagName(scope) }) catch @panic("PRINT");
 
