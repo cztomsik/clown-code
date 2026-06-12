@@ -2,7 +2,7 @@
     .name = .clown_code,
     .fingerprint = 0x9de520b364a68b88,
     .version = "0.0.0",
-    .minimum_zig_version = "0.15.2",
+    // .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .tokamak = .{
             .path = "../tokamak",

@@ -53,9 +53,9 @@ zig build run
 
 ## Getting started
 
-> **Note**: This project requires **Zig v0.15.2**. Make sure you have this version installed before building.
+> **Note**: This project targets **Zig v0.17.x**. Make sure you have this version installed before building.
 
-1. Clone this repo, build with `zig build` and put the `zig-out/bin/clown-code` somewhere on the PATH
+1. Clone this repo, build with `zig build` and put the `zig-out/bin/clown_code` somewhere on the PATH
 2. Switch to your project's directory
 3. Run `clown-code`
 4. Type in `/init` and send with Enter
