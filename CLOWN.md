@@ -10,13 +10,13 @@ The following tools are available in the environment:
 - **rg** (ripgrep) — `/opt/homebrew/bin/rg` (use `rg -o '^\s*(def|class|struct|function|fn)\s+\w+' .` for quick code navigation)
 - **jq** — `/opt/homebrew/bin/jq` (JSON processing)
 - **curl** — `/usr/bin/curl` (HTTP requests)
-- **zig** — required for building (v0.15.2 minimum)
+- **zig** — required for building (v0.17.x)
 
 ## Project Overview
 
 **Clown-Code** is a local, terminal-based AI coding assistant written in **Zig**, using the **tokamak TUI framework**. It connects to a local LLM (via llama.cpp) and provides the AI with tools to interact with the filesystem and shell. It is a self-hosted, privacy-friendly alternative to tools like Codex or Gemini-CLI.
 
-- **Tech stack**: Zig (v0.15.2+), tokamak TUI framework
+- **Tech stack**: Zig (v0.17.x), tokamak TUI framework
 - **Build command**: `zig build` / `zig build run`
 - **Dependency**: tokamak (local path dependency at `../tokamak`)
 - **Output**: `zig-out/bin/clown_code`
@@ -26,7 +26,7 @@ The following tools are available in the environment:
 | File | Purpose |
 |------|---------|
 | `src/main.zig` | Application entry point. Sets up the tokamak app with config, custom panic handler, debug logging, and tool registration. |
-| `src/tui.zig` | Terminal UI implementation. Handles the event loop (render, key input, idle), message display, header/footer, command handling (`/exit`, `/clear`, `/compact`, `/init`, `/retry`, `/sudo`, `/save`, `/load`, `/continue`, `/help`, `/models`), and scrollback. |
+| `src/tui.zig` | Terminal UI implementation. Handles the event loop (render, key input, idle), message display, header/footer, command handling (`/exit`, `/quit`, `/stop`, `/clear`, `/clear-tools`, `/compact`, `/init`, `/retry`, `/undo`, `/sudo`, `/save`, `/load`, `/continue`, `/help`, `/models`), and scrollback. |
 | `src/model.zig` | Core Clown struct — manages the AI agent lifecycle. Handles system prompt loading (PREFIX.md + CLOWN.md), conversation management, snapshot save/load (JSON), worker process for AI inference (fork-based with pipe communication), todo tracking, and compaction. |
 | `src/tools.zig` | All AI agent tools: `read_file`, `write_file`, `edit_file`, `run_command`, `scrape`, `hacker_news`, `reddit`, `update_todos`, `load_skill`, `advisor`. Each tool has typed args structs and docblock comments. Tools are registered via `registerAllTools()`. |
 | `src/PREFIX.md` | Base system prompt with guidelines (be concise, explain actions, safety first, best practices for reading/writing/modifying code, running commands, multi-step tasks, skills, and using the advisor tool). |
