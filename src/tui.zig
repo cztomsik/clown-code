@@ -72,21 +72,21 @@ pub const Tui = struct {
     fn header(self: *Tui, ui: tk.tui.Builder) void {
         if (ui.stack(4)) |p| {
             p.frame.z = 10;
-            p.frame.fill(ui.ctx.theme.base2);
+            p.frame.fill(.base2);
 
             if (p.row(&.{ 36, -1 })) |r| {
                 self.banner(r);
                 self.todos(r);
             }
 
-            p.frame.fg = ui.ctx.theme.base3;
+            p.frame.fg = .base3;
             p.frame.bottom(1).splat("_");
         }
     }
 
-    fn banner(self: *Tui, ui: tk.tui.Builder) void {
+    fn banner(_: *Tui, ui: tk.tui.Builder) void {
         const f = ui.next(-1, 5) orelse return;
-        f.with("fg", self.ctx.theme.accent).text(
+        f.with("fg", .accent).text(
             \\ ╭─────╮
             \\ │ >.< │  Clown Code
             \\ │ ──  │  /help for commands
@@ -102,7 +102,7 @@ pub const Tui = struct {
 
         if (st.collapsible(ui.ctx.fmt("Todos: {}", .{items.len}), ui.state(bool, false))) {
             st.spacer(1);
-            st.frame.at(0, 1).fill(ui.ctx.theme.base2);
+            st.frame.at(0, 1).fill(.base2);
 
             for (items) |it| {
                 st.text(it.name);
@@ -167,19 +167,19 @@ pub const Tui = struct {
 
     fn footer(self: *Tui, ui: tk.tui.Builder) void {
         if (ui.stack(-1)) |p| {
-            p.frame.fill(ui.ctx.theme.base2);
+            p.frame.fill(.base2);
             p.frame.* = p.frame.pad(.{ 1, 2, 1, 2 });
 
             if (p.row(&.{ -20, -10, -1 })) |r| {
                 r.label("User:");
 
-                r.frame.fg = ui.ctx.theme.secondary;
+                r.frame.fg = .secondary;
                 r.text("Tokens:");
                 r.num(self.clown.agent.total_tokens);
             }
 
             if (p.stack(3)) |r| {
-                r.frame.fill(ui.ctx.theme.base1);
+                r.frame.fill(.base1);
                 r.textArea(&self.buf, &self.msg_len, 3);
             }
         }
