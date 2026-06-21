@@ -193,7 +193,7 @@ pub const Tui = struct {
         if (std.mem.eql(u8, cmd, "compact")) try self.clown.compact();
         if (std.mem.eql(u8, cmd, "init")) try self.clown.send("Could you /init this project?");
         if (std.mem.eql(u8, cmd, "retry")) try self.clown.retry();
-        if (std.mem.eql(u8, cmd, "undo")) self.clown.undo();
+        if (std.mem.eql(u8, cmd, "undo")) self.clown.undo(self.buf[0..], &self.msg_len);
         if (std.mem.eql(u8, cmd, "sudo")) try self.clown.sudo();
         if (std.mem.eql(u8, cmd, "save")) try self.clown.save();
         if (std.mem.eql(u8, cmd, "load")) try self.clown.load(arg);

@@ -137,8 +137,15 @@ pub const Clown = struct {
         try self.start();
     }
 
-    pub fn undo(self: *Clown) void {
-        _ = self.agent.undo();
+    pub fn undo(self: *Clown, buf: []u8, msg_len: *usize) void {
+        if (self.agent.undo()) |msg| {
+            if (msg.content) |c| {
+                if (c.text.len < buf.len) {
+                    @memcpy(buf[0..c.text.len], c.text);
+                    msg_len.* = c.text.len;
+                }
+            }
+        }
     }
 
     pub fn retry(self: *Clown) !void {
