@@ -61,8 +61,11 @@ pub const Clown = struct {
     fn loadSystemPrompt(io: std.Io, arena: std.mem.Allocator) ![]const u8 {
         const prefix = @embedFile("PREFIX.md");
 
-        const project_context = std.Io.Dir.cwd().readFileAlloc(io, "CLOWN.md", arena, .limited(1024 * 1024)) catch |err| switch (err) {
-            error.FileNotFound => "",
+        const project_context = std.Io.Dir.cwd().readFileAlloc(io, "AGENTS.md", arena, .limited(1024 * 1024)) catch |err| switch (err) {
+            error.FileNotFound => std.Io.Dir.cwd().readFileAlloc(io, "CLOWN.md", arena, .limited(1024 * 1024)) catch |err2| switch (err2) {
+                error.FileNotFound => "",
+                else => return err2,
+            },
             else => return err,
         };
 

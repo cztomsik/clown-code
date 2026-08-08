@@ -59,7 +59,7 @@ zig build run
 2. Switch to your project's directory
 3. Run `clown-code`
 4. Type in `/init` and send with Enter
-5. Inspect your newly created CLOWN.md and change whatever you want to be in your system prompt.
+5. Inspect your newly created AGENTS.md and change whatever you want to be in your system prompt.
 
 ## Available tools
 

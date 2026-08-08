@@ -1,6 +1,6 @@
 # Init Skill
 
-Create a new `CLOWN.md` file in the current directory using the `write_file` tool. The file should contain **project-specific context only** — its content will be inserted in the agent's system prompt (after the shared common part).
+Create a new `AGENTS.md` file in the current directory using the `write_file` tool. The file should contain **project-specific context only** — its content will be inserted in the agent's system prompt (after the shared common part).
 
 ## Available system tools
 
@@ -20,4 +20,4 @@ Explore the project to understand its structure. Read key files (build config, e
 
 This section should be specific to the current project, not generic.
 
-Write the content to `CLOWN.md` and confirm success.
+Write the content to `AGENTS.md` and confirm success.
