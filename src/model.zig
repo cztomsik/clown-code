@@ -116,7 +116,7 @@ pub const Clown = struct {
 
     fn finishCompact(self: *Clown) !void {
         self.compacting = false;
-        const last = self.agent.messages.getLast() orelse return;
+        const last = self.agent.messages.last() orelse return;
         if (last.role != .assistant) return;
 
         const summary = last.content.?.text;
@@ -153,7 +153,7 @@ pub const Clown = struct {
 
     pub fn retry(self: *Clown) !void {
         // Strip only assistant/tool messages, keep the user message
-        while (self.agent.messages.getLast()) |msg| {
+        while (self.agent.messages.last()) |msg| {
             if (msg.role != .assistant and msg.role != .tool) break;
             _ = self.agent.messages.pop();
         }
