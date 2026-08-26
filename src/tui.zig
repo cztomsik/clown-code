@@ -115,7 +115,7 @@ pub const Tui = struct {
         if (ui.stack(-8)) |p| {
             p.frame.* = p.frame.pad(.{ 0, 2, 0, 2 });
 
-            if (p.grid(&.{ 10, -1 }, -1)) |g| {
+            if (p.grid(&.{-1}, -1)) |g| {
                 const prev_height = g.state(i32, g.frame.rect[3]);
 
                 // scroll == 0 means auto-scroll to bottom; scroll > 0 is lines from bottom
@@ -130,14 +130,21 @@ pub const Tui = struct {
                 for (self.clown.agent.messages.items) |msg| {
                     if (msg.role == .system) continue;
 
-                    g.label(@tagName(msg.role));
+                    // Differentiate roles by color only
+                    g.frame.fg = switch (msg.role) {
+                        .user => .accent,
+                        .assistant => .text,
+                        .tool => .secondary,
+                        else => .text,
+                    };
+
                     // TODO: TextOrContents
                     g.paragraph(msg.content.?.text, if (msg.role == .tool) 10 else -1);
 
                     if (msg.tool_calls) |tcs| {
                         for (tcs) |tc| {
-                            g.spacer(1); // skip first cell
-                            if (g.row(&.{ 12, -1 })) |r| {
+                            if (g.row(&.{ 20, -1 })) |r| {
+                                r.frame.fg = .secondary;
                                 r.text(tc.function.name);
                                 r.text(tc.function.arguments);
                             }
