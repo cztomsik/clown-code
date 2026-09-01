@@ -180,8 +180,8 @@ pub const Clown = struct {
         defer file.close(self.io);
 
         var fw = file.writer(self.io, &.{});
-        var jw = tk.serde.json.Writer.init(&fw.interface, .{ .whitespace = .indent_2 });
-        try tk.serde.serialize(&jw, self.makeSnapshot());
+        var jw: std.json.Stringify = .{ .writer = &fw.interface, .options = .{ .whitespace = .indent_2 } };
+        try jw.write(self.makeSnapshot());
     }
 
     pub fn load(self: *Clown, filename: []const u8) !void {
@@ -322,8 +322,8 @@ pub const Clown = struct {
     fn workerSend(self: *Clown, out: std.Io.File, msg: WorkerMsg) !void {
         var buf: [BUF_SIZE]u8 = undefined;
         var bw = out.writer(self.io, &buf);
-        var jw = tk.serde.json.Writer.init(&bw.interface, .{});
-        try tk.serde.serialize(&jw, msg);
+        var jw: std.json.Stringify = .{ .writer = &bw.interface };
+        try jw.write(msg);
         try bw.interface.writeAll("\n");
         try bw.interface.flush();
     }
