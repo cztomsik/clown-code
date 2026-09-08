@@ -136,67 +136,6 @@ pub fn runCommand(io: std.Io, arena: std.mem.Allocator, args: RunCommandArgs) ![
     return res.stdout;
 }
 
-pub const ScrapeArgs = struct {
-    url: []const u8,
-    query_selector: ?[]const u8,
-    req_delay_ms: i64 = 2_000,
-};
-
-/// Scrape a web page and convert it to markdown. Optionally filter to a CSS selector.
-pub fn scrape(io: std.Io, http_client: *tk.http.Client, arena: std.mem.Allocator, args: ScrapeArgs) ![]const u8 {
-    const H = struct {
-        var last_req: i64 = 0;
-    };
-    const now = tk.time.milliTimestamp();
-    const next = H.last_req + args.req_delay_ms;
-    if (next > now) io.sleep(.fromMilliseconds(next - now), .awake) catch {};
-    H.last_req = now;
-
-    const res = try http_client.request(arena, .{ .url = args.url });
-    const doc = try tk.dom.Document.parseFromSlice(arena, res.body);
-    defer doc.deinit();
-
-    var node = &doc.node;
-    if (args.query_selector) |sel| {
-        if (try doc.querySelector(sel)) |el| node = &el.node;
-    }
-
-    return try tk.html2md.html2md(arena, node, .{});
-}
-
-pub const HackerNewsArgs = struct {
-    sort: enum { top, new, best },
-    limit: u9 = 10,
-};
-
-/// Get stories from Hacker News.
-pub fn hackerNews(http_client: *tk.http.Client, arena: std.mem.Allocator, args: HackerNewsArgs) ![]const tk.ext.hackernews.Story {
-    var client = tk.ext.hackernews.Client{ .http_client = http_client };
-
-    return switch (args.sort) {
-        .top => try client.getTopStories(arena, args.limit),
-        .new => try client.getNewStories(arena, args.limit),
-        .best => try client.getBestStories(arena, args.limit),
-    };
-}
-
-pub const RedditArgs = struct {
-    subreddit: []const u8,
-    sort: enum { hot, new, top },
-    limit: u32 = 10,
-};
-
-/// Get posts from a Reddit subreddit.
-pub fn reddit(http_client: *tk.http.Client, arena: std.mem.Allocator, args: RedditArgs) ![]const tk.ext.reddit.Post {
-    var client = tk.ext.reddit.Client{ .http_client = http_client };
-
-    return switch (args.sort) {
-        .hot => try client.getHotPosts(arena, args.subreddit, args.limit),
-        .new => try client.getNewPosts(arena, args.subreddit, args.limit),
-        .top => try client.getTopPosts(arena, args.subreddit, args.limit),
-    };
-}
-
 pub const UpdateTodosArgs = struct {
     upsert: []const TodoItem,
 };
@@ -230,35 +169,6 @@ pub fn loadSkill(io: std.Io, arena: std.mem.Allocator, args: LoadSkillArgs) ![]c
     return std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(MAX_READ_SIZE));
 }
 
-pub const AdvisorArgs = struct {
-    question: []const u8,
-    model: []const u8 = "advisor",
-};
-
-/// Consult a larger model for hard problems.
-pub fn advisor(ai_client: *tk.ai.Client, arena: std.mem.Allocator, args: AdvisorArgs) ![]const u8 {
-    const res = try ai_client.createChatCompletion(arena, .{
-        .model = args.model,
-        .max_completion_tokens = 32 * 1024,
-        .messages = &.{
-            .{
-                .role = .system,
-                .content = .{ .text = "You are a senior software engineer advisor. Provide concise, expert answers to coding questions. Be direct and practical." },
-            },
-            .{
-                .role = .user,
-                .content = .{ .text = args.question },
-            },
-        },
-    });
-
-    if (res.singleChoice()) |ch| {
-        if (ch.text()) |answer| return answer;
-    }
-
-    return error.InvalidCompletion;
-}
-
 /// Register all standard tools with an AgentToolbox.
 pub fn registerAllTools(toolbox: *tk.ai.AgentToolbox) !void {
     try toolbox.addTool("update_todos", "Create/update todo item(s)", updateTodos);
@@ -267,10 +177,6 @@ pub fn registerAllTools(toolbox: *tk.ai.AgentToolbox) !void {
     try toolbox.addTool("edit_file", "Edit a file by replacing specific content. Set replace_all=true to replace all occurrences", editFile);
     try toolbox.addTool("run_command", "Execute a shell command and return its output", runCommand);
     try toolbox.addTool("load_skill", "Load a set of specialized instructions (a skill) into the current context to improve performance on a specific task.", loadSkill);
-    try toolbox.addTool("scrape", "Scrape a web page and convert it to markdown. Optionally filter to a CSS selector", scrape);
-    try toolbox.addTool("hacker_news", "Get stories from Hacker News", hackerNews);
-    try toolbox.addTool("reddit", "Get posts from a Reddit subreddit", reddit);
-    try toolbox.addTool("advisor", "Consult a larger, more capable model for hard problems", advisor);
 }
 
 test runCommand {

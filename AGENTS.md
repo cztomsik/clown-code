@@ -21,7 +21,7 @@ The following tools are available in the environment:
 - **Tests**: `zig build test` (optional `--test-filter <substr>`), unit tests live alongside code in `src/*.zig`
 - **Dependency**: tokamak (local path dependency at `../tokamak`, see `build.zig.zon`)
 - **Output**: `zig-out/bin/clown_code`
-- **AI server**: defaults to `http://127.0.0.1:8080`; override base URL with the `CLOWN_API` env var (see `EnvOverrides` in `src/main.zig`). README documents a llama.cpp preset with a `default` model and a larger `advisor` model.
+- **AI server**: defaults to `http://127.0.0.1:8080`; override base URL with the `CLOWN_API` env var (see `EnvOverrides` in `src/main.zig`). README documents a llama.cpp preset.
 
 ## Source Structure
 
@@ -30,8 +30,8 @@ The following tools are available in the environment:
 | `src/main.zig` | Application entry point. Sets up the tokamak app with config (AI client, env overrides), custom panic handler, debug logging, and tool registration. |
 | `src/tui.zig` | Terminal UI implementation. Handles the event loop (render, key input, idle), message display, header/footer, command handling (`/exit`, `/quit`, `/stop`, `/clear`, `/clear-tools`, `/compact`, `/init`, `/retry`, `/undo`, `/sudo`, `/save`, `/load <file>`, `/continue`, `/help`, `/models`), and scrollback. |
 | `src/model.zig` | Core `Clown` struct — manages the AI agent lifecycle. Handles system prompt loading (PREFIX.md + AGENTS.md), conversation management, snapshot save/load (JSON), worker process for AI inference (fork-based with pipe communication), todo tracking, and compaction. |
-| `src/tools.zig` | All AI agent tools: `read_file`, `write_file`, `edit_file`, `run_command`, `scrape`, `hacker_news`, `reddit`, `update_todos`, `load_skill`, `advisor`. Each tool has typed args structs and docblock comments (surfaced to the model). Tools are registered via `registerAllTools()`. Tool names must be snake_case (ADR 002). |
-| `src/PREFIX.md` | Base system prompt with guidelines (be concise, explain actions, safety first, best practices for reading/writing/modifying code, running commands, multi-step tasks, skills, and using the advisor tool). Embedded at compile time. |
+| `src/tools.zig` | All AI agent tools: `read_file`, `write_file`, `edit_file`, `run_command`, `update_todos`, `load_skill`. Each tool has typed args structs and docblock comments (surfaced to the model). Tools are registered via `registerAllTools()`. Tool names must be snake_case (ADR 002). |
+| `src/PREFIX.md` | Base system prompt with guidelines (be concise, explain actions, safety first, best practices for reading/writing/modifying code, running commands, multi-step tasks, and skills). Embedded at compile time. |
 | `src/panic.zig` | Custom panic handler. |
 | `src/log.zig` | Debug logging function (`std_options.logFn`). |
 | `src/skills/init.md` | Built-in `/init` skill — instructs the AI to explore the project and create an AGENTS.md file with system-specific context. |
