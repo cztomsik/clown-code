@@ -1,7 +1,5 @@
 const std = @import("std");
 const tk = @import("tokamak");
-const Clown = @import("model.zig").Clown;
-const TodoItem = @import("model.zig").TodoItem;
 
 // Constants
 const MAX_READ_SIZE = 2 * 1024 * 1024;
@@ -136,25 +134,6 @@ pub fn runCommand(io: std.Io, arena: std.mem.Allocator, args: RunCommandArgs) ![
     return res.stdout;
 }
 
-pub const UpdateTodosArgs = struct {
-    upsert: []const TodoItem,
-};
-
-pub fn updateTodos(clown: *Clown, arena: std.mem.Allocator, args: UpdateTodosArgs) ![]const TodoItem {
-    next: for (args.upsert) |ch| {
-        for (clown.todos.items) |*it| {
-            if (std.mem.eql(u8, it.name, ch.name)) {
-                it.* = ch;
-                continue :next;
-            }
-        } else {
-            try clown.todos.append(arena, ch);
-        }
-    }
-
-    return clown.todos.items;
-}
-
 pub const LoadSkillArgs = struct {
     skill_name: []const u8,
 };
@@ -171,7 +150,6 @@ pub fn loadSkill(io: std.Io, arena: std.mem.Allocator, args: LoadSkillArgs) ![]c
 
 /// Register all standard tools with an AgentToolbox.
 pub fn registerAllTools(toolbox: *tk.ai.AgentToolbox) !void {
-    try toolbox.addTool("update_todos", "Create/update todo item(s)", updateTodos);
     try toolbox.addTool("read_file", "Read the contents of a file", readFile);
     try toolbox.addTool("write_file", "Write content to a file, creating directories if needed", writeFile);
     try toolbox.addTool("edit_file", "Edit a file by replacing specific content. Set replace_all=true to replace all occurrences", editFile);

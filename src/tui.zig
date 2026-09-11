@@ -10,11 +10,8 @@ pub const Tui = struct {
     msg_len: usize = 0,
     last_esc: i64 = 0,
     last_ctrl_c: i64 = 0,
-    flash: ?[]const u8 = null,
 
     pub fn run(self: *Tui) !void {
-        self.ctx.focus = 1; // Start with text input focused
-
         loop: while (true) {
             switch (try self.ctx.tick()) {
                 .render => |ui| self.render(ui),
@@ -23,7 +20,6 @@ pub const Tui = struct {
                         const now = tk.time.milliTimestamp();
                         if (now - self.last_ctrl_c < 500) break;
                         self.clown.stop();
-                        self.flash = "Worker stopped. Press ctrl_c again to exit.";
                         self.last_ctrl_c = now;
                     },
                     .escape => {
@@ -59,56 +55,8 @@ pub const Tui = struct {
     }
 
     fn render(self: *Tui, ui: tk.tui.Builder) void {
-        self.header(ui);
         self.messages(ui);
         self.footer(ui);
-
-        if (self.flash) |msg| {
-            ui.flash(msg);
-            self.flash = null;
-        }
-    }
-
-    fn header(self: *Tui, ui: tk.tui.Builder) void {
-        if (ui.stack(4)) |p| {
-            p.frame.z = 10;
-            p.frame.fill(.base2);
-
-            if (p.row(&.{ 36, -1 })) |r| {
-                self.banner(r);
-                self.todos(r);
-            }
-
-            p.frame.fg = .base3;
-            p.frame.bottom(1).splat("_");
-        }
-    }
-
-    fn banner(_: *Tui, ui: tk.tui.Builder) void {
-        const f = ui.next(-1, 5) orelse return;
-        f.with("fg", .accent).text(
-            \\ ╭─────╮
-            \\ │ >.< │  Clown Code
-            \\ │ ──  │  /help for commands
-        );
-    }
-
-    fn todos(self: *Tui, ui: tk.tui.Builder) void {
-        const items = self.clown.todos.items;
-        const st = ui.grid(&.{ -7, 7 }, @intCast(items.len + 1)) orelse return;
-        st.frame.rect[1] += 1;
-        st.frame.z = 20;
-        st.container().layout.spacing = 0;
-
-        if (st.collapsible(ui.ctx.fmt("Todos: {}", .{items.len}), ui.state(bool, false))) {
-            st.spacer(1);
-            st.frame.at(0, 1).fill(.base2);
-
-            for (items) |it| {
-                st.text(it.name);
-                st.text(it.status);
-            }
-        }
     }
 
     fn messages(self: *Tui, ui: tk.tui.Builder) void {
@@ -201,35 +149,9 @@ pub const Tui = struct {
         if (std.mem.eql(u8, cmd, "init")) try self.clown.send("Could you /init this project?");
         if (std.mem.eql(u8, cmd, "retry")) try self.clown.retry();
         if (std.mem.eql(u8, cmd, "undo")) self.clown.undo(self.buf[0..], &self.msg_len);
-        if (std.mem.eql(u8, cmd, "sudo")) try self.clown.sudo();
         if (std.mem.eql(u8, cmd, "save")) try self.clown.save();
         if (std.mem.eql(u8, cmd, "load")) try self.clown.load(arg);
         if (std.mem.eql(u8, cmd, "continue")) try self.clown.@"continue"();
-
-        if (std.mem.eql(u8, cmd, "help")) {
-            self.flash =
-                \\Available commands:
-                \\ /exit, /quit  - Exit the application
-                \\ /stop         - Stop the current AI processing
-                \\ /clear        - Clear the conversation history
-                \\ /clear-tools  - Remove all tool call results
-                \\ /compact      - Summarize the conversation to reduce token usage
-                \\ /init         - Initialize project context
-                \\ /retry        - Retry the last interaction
-                \\ /undo         - Remove the last message
-                \\ /sudo         - Retry with "sure" prefix
-                \\ /save         - Save the conversation
-                \\ /load <file>  - Load a saved conversation
-                \\ /continue     - Continue the last session
-                \\ /help         - Show this help message
-            ;
-        }
-
-        if (std.mem.eql(u8, cmd, "models")) {
-            const models = try self.clown.agent.runtime.client.listModels(self.clown.agent.arena);
-            // TODO: maybe the ctx.fmt() should be useful even for multi-frame prints...
-            self.flash = std.fmt.allocPrint(self.clown.agent.arena, "Available models:\n{f}", .{std.json.fmt(models, .{})}) catch "OOM";
-        }
 
         return true;
     }
