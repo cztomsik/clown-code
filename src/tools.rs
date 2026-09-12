@@ -57,9 +57,16 @@ struct ReadFileArgs {
 }
 
 /// Read the contents of a file.
+/// Files above `MAX_READ_SIZE` are an error (not silently truncated),
+/// so the model falls back to targeted reads (e.g. via `run_command`).
 /// If `raw` is false (default), output is prefixed with line numbers (e.g., "1:content").
 fn read_file(args: &Value) -> Result<String, String> {
     let args: ReadFileArgs = serde_json::from_value(args.clone()).map_err(|e| e.to_string())?;
+
+    let len = std::fs::metadata(&args.path).map_err(|e| io_err(&e))?.len();
+    if len > MAX_READ_SIZE as u64 {
+        return Err("FileTooLarge".into());
+    }
 
     let bytes = read_capped(&args.path)?;
     let contents = validate_utf8(&bytes)?;
@@ -220,6 +227,10 @@ fn run_command(args: &Value) -> Result<String, String> {
 
     let mut cmd = std::process::Command::new("sh");
     cmd.arg("-c").arg(&args.command);
+    // stdin is null so commands that read stdin (prompts, `cat`, npm
+    // questions) get EOF immediately instead of hanging on input that
+    // never arrives. We only ever capture stdout/stderr.
+    cmd.stdin(std::process::Stdio::null());
     if let Some(cwd) = &args.cwd {
         cmd.current_dir(cwd);
     }
@@ -307,5 +318,28 @@ pub fn load_skill_entry() -> ToolEntry {
             "additionalProperties": false
         }),
         handler: load_skill,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_file_rejects_files_above_cap() {
+        let dir = std::env::temp_dir().join(format!("clown-code-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.txt");
+        let args = json!({ "path": path.to_string_lossy() });
+
+        // Just above the cap is an error.
+        std::fs::write(&path, vec![b'a'; MAX_READ_SIZE + 1]).unwrap();
+        assert_eq!(read_file(&args).unwrap_err(), "FileTooLarge");
+
+        // Exactly at the cap is fine.
+        std::fs::write(&path, vec![b'a'; MAX_READ_SIZE]).unwrap();
+        assert!(read_file(&args).is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

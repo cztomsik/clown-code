@@ -64,9 +64,14 @@ impl Agent {
                 return Err("NoChoice".into());
             };
             let is_empty = choice.text().is_none_or(str::is_empty);
+            let is_corrupt = is_corrupt_tool_calls(choice.message.tool_calls.as_deref());
 
             if choice.message.tool_calls.is_none() && is_empty {
                 tracing::debug!("empty choice, retrying");
+                continue;
+            }
+            if is_corrupt {
+                tracing::debug!("corrupt tool call arguments, retrying");
                 continue;
             }
 
@@ -102,6 +107,23 @@ impl Agent {
         }
     }
 
+    /// Roll back to just before the LAST assistant message — strip
+    /// that message and everything after it (any tool results it
+    /// spawned and any later user nudge). Returns false when there is
+    /// no assistant message. The new tail is always a valid user/tool
+    /// resume point for the loop.
+    pub fn pop_to_last_assistant(&mut self) -> bool {
+        let Some(i) = self
+            .messages
+            .iter()
+            .rposition(|m| m.role == Role::Assistant)
+        else {
+            return false;
+        };
+        self.messages.truncate(i);
+        true
+    }
+
     /// Remove trailing assistant/tool messages.
     pub fn pop_trailing_assistant_and_tools(&mut self) {
         while let Some(msg) = self.messages.last() {
@@ -124,6 +146,19 @@ impl Agent {
         }
         None
     }
+}
+
+/// A truncated completion can yield tool_calls whose `arguments` is
+/// not valid JSON. Persisting such a message would poison the
+/// transcript: the provider 400s on it in every subsequent request.
+/// Absent/empty arguments mean "no params" and are fine.
+fn is_corrupt_tool_calls(tcs: Option<&[ToolCall]>) -> bool {
+    tcs.is_some_and(|tcs| {
+        tcs.iter().any(|tc| {
+            !tc.function.arguments.is_empty()
+                && serde_json::from_str::<serde_json::Value>(&tc.function.arguments).is_err()
+        })
+    })
 }
 
 // ============================================================= session
@@ -446,6 +481,19 @@ impl Clown {
         self.start();
     }
 
+    /// Drop the last assistant message (and everything after it) and
+    /// re-run from there. Unlike `retry` (which rolls back to the last
+    /// user message), this reaches a poisoned mid-turn assistant
+    /// response that is followed by a tool result or a later user
+    /// message. Returns false when there was nothing to retry.
+    pub fn retry_turn(&mut self) -> bool {
+        if !self.agent.pop_to_last_assistant() {
+            return false;
+        }
+        self.start();
+        true
+    }
+
     /// Remove trailing assistant/tool messages and the preceding user
     /// message, returning its text (if any) so the TUI can copy it back
     /// into the input buffer for re-prompting.
@@ -546,6 +594,47 @@ mod tests {
         c.agent.pop_trailing_assistant_and_tools();
         assert_eq!(c.agent.messages.len(), 2);
         assert_eq!(c.agent.messages[1].role, Role::User);
+    }
+
+    #[test]
+    fn pop_to_last_assistant_strips_last_assistant_and_after() {
+        let mut c = clown_with_history();
+        // history: system, user, assistant, tool, assistant
+        assert!(c.agent.pop_to_last_assistant());
+        assert_eq!(c.agent.messages.len(), 4);
+        assert_eq!(c.agent.messages[3].role, Role::Tool);
+        assert!(c.agent.pop_to_last_assistant());
+        assert_eq!(c.agent.messages.len(), 2);
+        assert_eq!(c.agent.messages[1].role, Role::User);
+        // no assistant message left
+        assert!(!c.agent.pop_to_last_assistant());
+        assert_eq!(c.agent.messages.len(), 2);
+    }
+
+    #[test]
+    fn corrupt_tool_call_args_detected() {
+        use crate::llm::{FunctionCall, ToolType};
+
+        fn tc(arguments: &str) -> ToolCall {
+            ToolCall {
+                id: "call_1".into(),
+                tool_type: ToolType::Function,
+                function: FunctionCall {
+                    name: "read_file".into(),
+                    arguments: arguments.into(),
+                },
+            }
+        }
+
+        assert!(is_corrupt_tool_calls(Some(std::slice::from_ref(&tc(
+            "{\"path\": "
+        )))));
+        assert!(!is_corrupt_tool_calls(Some(std::slice::from_ref(&tc(
+            "{\"path\": \"a\"}"
+        )))));
+        // Absent/empty arguments = no params, fine.
+        assert!(!is_corrupt_tool_calls(Some(std::slice::from_ref(&tc("")))));
+        assert!(!is_corrupt_tool_calls(None));
     }
 
     /// Full-loop test against a closed port: send → worker starts →

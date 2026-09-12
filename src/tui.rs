@@ -132,7 +132,10 @@ impl Input {
     /// Insert pasted text at the cursor: tabs become spaces, everything
     /// else (including newlines) is inserted verbatim.
     pub fn paste(&mut self, text: &str) {
-        let insert: String = text.chars().map(|c| if c == '\t' { ' ' } else { c }).collect();
+        let insert: String = text
+            .chars()
+            .map(|c| if c == '\t' { ' ' } else { c })
+            .collect();
         let at = self.cursor;
         self.buf.insert_str(at, &insert);
         self.cursor = at + insert.len();
@@ -304,6 +307,9 @@ impl Tui {
             "compact" => self.clown.compact(),
             "init" => self.clown.send("Could you /init this project?"),
             "retry" => self.clown.retry(),
+            "retry-turn" => {
+                self.clown.retry_turn();
+            }
             "undo" => {
                 if let Some(text) = self.clown.undo() {
                     self.input.set(&text);
