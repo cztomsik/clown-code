@@ -209,8 +209,6 @@ pub fn edit_file_entry() -> ToolEntry {
 #[serde(deny_unknown_fields)]
 struct RunCommandArgs {
     command: String,
-    #[serde(default)]
-    cwd: Option<String>,
 }
 
 fn to_capped_str(bytes: &[u8]) -> Result<String, String> {
@@ -232,9 +230,6 @@ fn run_command(args: &Value) -> Result<String, String> {
     // questions) get EOF immediately instead of hanging on input that
     // never arrives. We only ever capture stdout/stderr.
     cmd.stdin(std::process::Stdio::null());
-    if let Some(cwd) = &args.cwd {
-        cmd.current_dir(cwd);
-    }
 
     let output = cmd.output().map_err(|e| e.to_string())?;
 
@@ -262,12 +257,11 @@ fn run_command(args: &Value) -> Result<String, String> {
 pub fn run_command_entry() -> ToolEntry {
     ToolEntry {
         name: "run_command",
-        description: "Execute a shell command and return its output",
+        description: "Execute a shell command in the current working directory and return its output.",
         parameters: json!({
             "type": "object",
             "properties": {
-                "command": { "type": "string" },
-                "cwd": { "type": "string" }
+                "command": { "type": "string" }
             },
             "required": ["command"],
             "additionalProperties": false

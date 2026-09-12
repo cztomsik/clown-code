@@ -773,7 +773,7 @@ mod tests {
     #[test]
     fn tool_call_summary_extracts_the_relevant_field() {
         assert_eq!(
-            tool_call_summary("run_command", r#"{"command": "ls -la", "cwd": "x"}"#),
+            tool_call_summary("run_command", r#"{"command": "ls -la"}"#),
             "ls -la"
         );
         assert_eq!(
