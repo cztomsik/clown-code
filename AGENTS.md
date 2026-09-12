@@ -26,7 +26,7 @@ The following tools are available in the environment:
 
 | File | Purpose |
 |------|---------|
-| `src/main.rs` | Application entry point. Sets up logging (`debug.log`) and a panic handler (`error.log`), loads `Config`, supports `--print-prompt` (prints the assembled system prompt), then runs the TUI. |
+| `src/main.rs` | Application entry point. Loads `Config`, supports `--print-prompt` (prints the assembled system prompt), then runs the TUI. |
 | `src/tui.rs` | Terminal UI (ratatui). Event loop (render, key input, idle), fixed clown banner header, message display, footer (status row + input box), command handling (`/help`, `/exit`, `/quit`, `/stop`, `/clear`, `/clear-tools`, `/compact`, `/init`, `/retry`, `/retry-turn`, `/undo`, `/models`, `/model [name]`, `/save`, `/load <file>`, `/continue`; the argument is the entire rest of the line, so filenames with spaces work), and scrollback. |
 | `src/model.rs` | Core `Clown` struct — manages the AI agent lifecycle. Agent loop (`Agent`, which owns the client, the selected model, toolbox, and message history), system prompt loading, conversation management, snapshot save/load (JSON), and the worker thread (mpsc-based). The model is auto-discovered at startup (first id from the server's model list, fallback `"default"`); change it with `/model <name>`. Ctrl-C handling: stop the worker; double Ctrl-C exits. |
 | `src/tools.rs` | All AI agent tools: `read_file`, `write_file`, `edit_file`, `run_command`, `load_skill`. Each tool has typed args and a hand-written JSON schema + description (surfaced to the model) in its `*_entry()` constructor. The built-in `/init` skill is `BUILTIN_INIT` (`src/skills/init.md`). Tool names are snake_case. |
