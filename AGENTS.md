@@ -43,4 +43,3 @@ The following tools are available in the environment:
 - **System Prompt**: Composed from `PREFIX.md` (embedded at compile time) + `AGENTS.md` (project context loaded at runtime from cwd, up to 1MB), plus today's date and current working directory.
 - **Conversation Persistence**: Snapshots (messages, todos, total tokens) can be saved to `session-YYYY-MM-DD HH:MM:SS UTC.json` and reloaded. The `/continue` command auto-loads the most recent session.
 - **Skills System**: `load_skill` tool loads `.md` files from `skills/` directory (or built-in skills like `init`), injecting their contents as system instructions.
-- **ADR Directory**: Architecture Decision Records in `adr/` (001-use-adr.md, 002-use-snake-case-tool-names.md, 003-edit-file-line-range.md).
