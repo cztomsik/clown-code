@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 
 use crossterm::cursor::Show;
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-    MouseEventKind,
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers, MouseEventKind,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -30,125 +30,9 @@ use ratatui::widgets::{Block, Paragraph};
 use indoc::indoc;
 
 use crate::config::Config;
+use crate::input::Input;
 use crate::llm::Role;
 use crate::model::Clown;
-
-// ============================================================== input
-
-// Multi-line input buffer.
-//
-// Byte-offset cursor, codepoint-unit backspace/delete/arrows,
-// Home/Up → start, End/Down → end, bracketed paste inserts text
-// (tabs become spaces). Enter does NOT insert a newline here — the
-// main loop always captures it to send.
-
-#[derive(Default)]
-pub struct Input {
-    buf: String,
-    cursor: usize, // byte offset
-}
-
-impl Input {
-    pub fn as_str(&self) -> &str {
-        &self.buf
-    }
-
-    pub fn cursor(&self) -> usize {
-        self.cursor
-    }
-
-    /// Replace the buffer contents (used by `/undo`).
-    pub fn set(&mut self, text: &str) {
-        self.buf = text.to_string();
-        self.cursor = self.buf.len();
-    }
-
-    pub fn take(&mut self) -> String {
-        let buf = std::mem::take(&mut self.buf);
-        self.cursor = 0;
-        buf
-    }
-
-    /// Handle a key not captured by the main loop. Returns true if the
-    /// buffer changed (triggering a redraw in the caller).
-    pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
-        match key.code {
-            KeyCode::Char(c) => self.insert_char(c),
-            KeyCode::Backspace => {
-                if self.cursor > 0 {
-                    let start = self.buf[..self.cursor]
-                        .char_indices()
-                        .next_back()
-                        .map(|(i, _)| i)
-                        .unwrap();
-                    self.buf.replace_range(start..self.cursor, "");
-                    self.cursor = start;
-                }
-                true
-            }
-            KeyCode::Delete => {
-                if self.cursor < self.buf.len() {
-                    let end = self.buf[self.cursor..]
-                        .char_indices()
-                        .next()
-                        .map(|(i, _)| i + self.cursor)
-                        .unwrap_or(self.buf.len());
-                    self.buf.replace_range(self.cursor..end, "");
-                }
-                true
-            }
-            KeyCode::Left => {
-                if self.cursor > 0 {
-                    let start = self.buf[..self.cursor]
-                        .char_indices()
-                        .next_back()
-                        .map(|(i, _)| i)
-                        .unwrap();
-                    self.cursor = start;
-                }
-                false
-            }
-            KeyCode::Right => {
-                if self.cursor < self.buf.len() {
-                    let end = self.buf[self.cursor..]
-                        .char_indices()
-                        .next()
-                        .map(|(i, _)| i + self.cursor)
-                        .unwrap_or(self.buf.len());
-                    self.cursor = end.min(self.buf.len());
-                }
-                false
-            }
-            KeyCode::Home | KeyCode::Up => {
-                self.cursor = 0;
-                false
-            }
-            KeyCode::End | KeyCode::Down => {
-                self.cursor = self.buf.len();
-                false
-            }
-            _ => false,
-        }
-    }
-
-    /// Insert pasted text at the cursor: tabs become spaces, everything
-    /// else (including newlines) is inserted verbatim.
-    pub fn paste(&mut self, text: &str) {
-        let insert: String = text
-            .chars()
-            .map(|c| if c == '\t' { ' ' } else { c })
-            .collect();
-        let at = self.cursor;
-        self.buf.insert_str(at, &insert);
-        self.cursor = at + insert.len();
-    }
-
-    fn insert_char(&mut self, c: char) -> bool {
-        self.buf.insert(self.cursor, c);
-        self.cursor += c.len_utf8();
-        true
-    }
-}
 
 // =============================================================== tui
 
@@ -253,7 +137,7 @@ impl Tui {
     }
 
     /// Returns true when the app should exit.
-    fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+    fn handle_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let now = Instant::now();
