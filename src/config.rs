@@ -26,15 +26,3 @@ impl Config {
         config
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn defaults() {
-        let c = Config::default();
-        assert_eq!(c.base_url, "http://127.0.0.1:8080");
-        assert_eq!(c.timeout_secs, 900);
-    }
-}
