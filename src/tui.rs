@@ -682,11 +682,14 @@ fn build_message_lines(clown: &Clown, width: usize) -> Vec<Line<'static>> {
     }
 
     if let Some(e) = &clown.err {
+        // Wrap into real `Line`s — a `Span`'s embedded `\n` is dropped
+        // by the buffer, so an unformatted anyhow chain would render
+        // as one clipped line.
+        let style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!("Error: {e}"),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        )));
+        for l in wrap_text(&format!("Error: {e}"), width) {
+            lines.push(Line::from(l).style(style));
+        }
     }
 
     lines
