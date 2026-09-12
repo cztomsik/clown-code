@@ -31,7 +31,7 @@ The following tools are available in the environment:
 | `src/model.rs` | Core `Clown` struct — manages the AI agent lifecycle. Agent loop (`Agent`, which owns the client, the selected model, toolbox, and message history), system prompt loading, conversation management, snapshot save/load (JSON), and the worker thread (mpsc-based). The model is auto-discovered at startup (first id from the server's model list, fallback `"default"`); change it with `/model <name>`. Ctrl-C handling: stop the worker; double Ctrl-C exits. |
 | `src/tools.rs` | All AI agent tools: `read_file`, `write_file`, `edit_file`, `run_command`, `load_skill`. Each tool has typed args and a hand-written JSON schema + description (surfaced to the model) in its `*_entry()` constructor. The built-in `/init` skill is `BUILTIN_INIT` (`src/skills/init.md`). Tool names are snake_case. |
 | `src/llm.rs` | The LLM layer — OpenAI-compatible chat types, blocking HTTP client (`reqwest`, including a short-timeout `list_models()` for `/v1/models` discovery), and the tool registry/`Toolbox`. Wire format is a stable contract: only `null` optionals are omitted (`skip_serializing_if`) and field order is preserved. |
-| `src/prompt.rs` | System prompt assembly: `PREFIX.md` (embedded at compile time) + `AGENTS.md`/`CLOWN.md` (loaded at runtime from cwd, up to 1MB), plus today's date and the resolved cwd. |
+| `src/prompt.rs` | System prompt assembly: `PREFIX.md` (embedded at compile time) + `AGENTS.md`/`CLOWN.md` (loaded at runtime from cwd), plus today's date and the resolved cwd. |
 | `src/config.rs` | `Config::from_env()` — base URL default and `CLOWN_API` override. |
 | `src/PREFIX.md` | Base system prompt with guidelines. Embedded at compile time. |
 | `src/skills/init.md` | Built-in `/init` skill — instructs the AI to explore the project and create an AGENTS.md file with system-specific context. |
@@ -40,7 +40,7 @@ The following tools are available in the environment:
 
 - **TUI Framework**: ratatui + crossterm.
 - **AI Communication**: The agent loop runs in a worker thread and reports back over an mpsc channel as incremental `WorkerMsg`s (each new message as it is created, token count, or error), so the TUI can interrupt an in-flight LLM call. The parent's message history is appended to as messages arrive.
-- **System Prompt**: Composed from `PREFIX.md` (embedded at compile time) + `AGENTS.md` (project context loaded at runtime from cwd, up to 1MB), plus today's date and current working directory.
+- **System Prompt**: Composed from `PREFIX.md` (embedded at compile time) + `AGENTS.md` (project context loaded at runtime from cwd), plus today's date and current working directory.
 - **Conversation Persistence**: Snapshots (messages, total tokens) can be saved to `session-YYYY-MM-DD HH:MM:SS UTC.json` and reloaded. The `/continue` command auto-loads the most recent session. JSON key order is preserved (part of the session-file contract).
 - **Skills System**: `load_skill` tool loads `.md` files from the `skills/` directory (or built-in skills like `init`), injecting their contents as system instructions.
 - **CI**: `.github/workflows/ci.yml` runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` on push/PR.
