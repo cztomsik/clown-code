@@ -14,8 +14,8 @@ crossterm = "0.28"
 ratatui = "0.29"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
-# preserve_order keeps JSON object keys in insertion order (Zig parity —
-# tokamak writes fields in declaration order, not sorted).
+# preserve_order keeps JSON object keys in insertion order (declaration
+# order, not sorted) — part of the stable session-file wire format.
 serde_json = { version = "1", features = ["preserve_order"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"

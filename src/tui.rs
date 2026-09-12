@@ -1,6 +1,4 @@
 //! The TUI — event loop, multi-line input buffer, and rendering.
-//!
-//! Port of `src/tui.zig` + tokamak's `textArea` control semantics.
 
 use std::io;
 use std::time::{Duration, Instant};
@@ -28,14 +26,12 @@ use crate::model::Clown;
 
 // Multi-line input buffer.
 //
-// Port of tokamak's `editText`/`editTextArea` control semantics:
-// byte-offset cursor, codepoint-unit backspace/delete/arrows,
+// Byte-offset cursor, codepoint-unit backspace/delete/arrows,
 // Home/Up → start, End/Down → end, bracketed paste inserts text
 // (tabs become spaces). Enter does NOT insert a newline here — the
-// main loop always captures it to send (as in the Zig TUI, where
-// `textArea`'s enter handler is unreachable).
+// main loop always captures it to send.
 
-const MAX_LEN: usize = 4096; // bytes, as in the Zig `buf: [4096]u8`
+const MAX_LEN: usize = 4096; // bytes
 
 #[derive(Default)]
 pub struct Input {
@@ -121,7 +117,6 @@ impl Input {
                 }
                 false
             }
-            // Zig: .home, .up => cur = 0 / .end, .down => cur = len
             KeyCode::Home | KeyCode::Up => {
                 self.cursor = 0;
                 false
@@ -163,7 +158,7 @@ impl Input {
 
 // =============================================================== tui
 
-/// How long to wait for an event before ticking/redrawing (Zig's `.idle`).
+/// How long to wait for an event before ticking/redrawing.
 const POLL_TIMEOUT: Duration = Duration::from_millis(10);
 /// Double Ctrl-C within this window exits; a single one stops the worker.
 const CTRL_C_WINDOW: Duration = Duration::from_millis(500);
@@ -199,18 +194,18 @@ pub fn run(config: &Config) -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
-    // Original (tokamak `screen.zig`) enables mouse report modes
-    // ?1000h ?1002h ?1003h ?1006h (buttons, drag, all motion, SGR) so
-    // wheel events arrive as <64;...M / <65;...M. crossterm's
-    // EnableMouseCapture enables exactly those (plus 1015).
+    // Enable mouse report modes ?1000h ?1002h ?1003h ?1006h (buttons,
+    // drag, all motion, SGR) so wheel events arrive as <64;...M /
+    // <65;...M. crossterm's EnableMouseCapture enables exactly those
+    // (plus 1015).
     execute!(stdout, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
     let result = tui.run(&mut terminal);
 
-    // Teardown mirrors the original `stop()`; ignore errors — the
-    // terminal is already mid-shutdown if we got here via a panic.
+    // Teardown; ignore errors — the terminal is already
+    // mid-shutdown if we got here via a panic.
     // (stdout was moved into the backend, so write via it.)
     let _ = execute!(
         terminal.backend_mut(),
@@ -229,10 +224,8 @@ impl Tui {
         terminal: &mut ratatui::Terminal<CrosstermBackend<io::Stdout>>,
     ) -> io::Result<()> {
         loop {
-            // Zig: on `.idle` -> clown.tick().
             let ticked = self.clown.tick();
 
-            // Zig: on `.key` / `.render`.
             let mut got_event = false;
             if event::poll(POLL_TIMEOUT)? {
                 match event::read()? {
@@ -246,8 +239,7 @@ impl Tui {
                         MouseEventKind::ScrollDown => self.scroll = self.scroll.saturating_sub(1),
                         _ => {}
                     },
-                    // Bracketed paste goes straight into the input box
-                    // (Zig: `paste_start` → `pasteText`).
+                    // Bracketed paste goes straight into the input box.
                     Event::Paste(text) => {
                         self.input.paste(&text);
                     }
@@ -256,10 +248,10 @@ impl Tui {
                 got_event = true;
             }
 
-            // Only redraw when something observable changed — mirrors
-            // tokamak emitting `.render` on change rather than every
-            // poll. The "Processing… Ns" counter ticks once a second
-            // while a worker is busy, so redraw on each new second too.
+            // Only redraw when something observable changed rather than
+            // every poll. The "Processing… Ns" counter ticks once a
+            // second while a worker is busy, so redraw on each new
+            // second too.
             let elapsed = self.clown.elapsed();
             let changed = ticked
                 || got_event
@@ -317,7 +309,7 @@ impl Tui {
                     self.clown.send(input);
                 }
             }
-            // Everything else goes to the input box (Zig: pending_key).
+            // Everything else goes to the input box.
             _ => {
                 self.input.handle_key(key);
             }
@@ -325,7 +317,7 @@ impl Tui {
         false
     }
 
-    /// Port of `handleCommand` — returns false to exit.
+    /// Returns false to exit.
     fn handle_command(&mut self, cmd: &str, arg: &str) -> bool {
         match cmd {
             "exit" | "quit" => return false,
@@ -364,18 +356,16 @@ impl Tui {
 
 // ============================================================ rendering
 
-// Rendering — port of `Tui.render`/`messages`/`footer` in `src/tui.zig`.
+// Rendering.
 //
-// Nord theme (tokamak's default), same layout: message area fills the
-// screen, an 8-row footer at the bottom (status row + 3-row input box).
+// Nord theme, layout: message area fills the screen, an 8-row footer
+// at the bottom (status row + 3-row input box).
 
-/// Nord palette (tokamak's `Theme.nord`).
+/// Nord palette.
 ///
-/// The original hardcodes `truecolor = false`, so it always emits
-/// 256-color SGR (`38;5;N;48;5;N`) via `Color.to256()`. We match that
-/// with `Color::Indexed` using the same indices the original computes —
-/// terminals that don't honor 24-bit truecolor otherwise misrender the
-/// background. The hex values are kept in the comments.
+/// Colors are 256-color indexed (SGR `38;5;N;48;5;N`) rather than 24-bit
+/// truecolor — terminals that don't honor truecolor otherwise
+/// misrender the background. The hex values are kept in the comments.
 pub mod theme {
     use ratatui::style::Color;
 
@@ -389,12 +379,11 @@ pub mod theme {
 
 const FOOTER_HEIGHT: u16 = 8;
 const INPUT_ROWS: usize = 3;
-/// Tool results are clamped to 10 lines (Zig: `paragraph(..., if tool 10 else -1)`).
+/// Tool results are clamped to 10 lines.
 const TOOL_MAX_LINES: usize = 10;
 
 /// Geometry inside the footer: 1 row top padding, status row at +1, a 1-row
-/// spacing gap at +2, then the 3-row input box at +3 (Zig: footer pads
-/// `.{1,2,1,2}` and the layout spacing is 1).
+/// spacing gap at +2, then the 3-row input box at +3.
 const INPUT_AREA_TOP: u16 = 3;
 const INPUT_AREA_HEIGHT: u16 = INPUT_ROWS as u16;
 
@@ -404,9 +393,9 @@ fn draw(f: &mut Frame, clown: &Clown, input: &Input, scroll: i32) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    // The original fills the whole root frame with base1 before drawing
-    // anything (`self.stack[0].frame.fill(.base1)`), so the 2-col side
-    // margins of the message area are base1 too, not the terminal default.
+    // Fill the whole root frame with base1 before drawing anything, so
+    // the 2-col side margins of the message area are base1 too, not the
+    // terminal default.
     f.render_widget(
         Block::default().style(Style::default().bg(theme::BASE1)),
         area,
@@ -422,7 +411,6 @@ fn draw(f: &mut Frame, clown: &Clown, input: &Input, scroll: i32) {
 }
 
 fn role_style(role: Role) -> Color {
-    // Zig: user => .accent, assistant => .text, tool => .secondary
     match role {
         Role::User => theme::ACCENT,
         Role::Tool => theme::SECONDARY,
@@ -430,8 +418,7 @@ fn role_style(role: Role) -> Color {
     }
 }
 
-/// Build every message as flat, pre-wrapped lines (the Zig `grid` of
-/// paragraphs), then apply scrollback.
+/// Build every message as flat, pre-wrapped lines, then apply scrollback.
 fn messages(f: &mut Frame, clown: &Clown, area: Rect, scroll: i32) {
     let width = (area.width.saturating_sub(4)).max(1) as usize; // pad 2/2
 
@@ -457,7 +444,7 @@ fn messages(f: &mut Frame, clown: &Clown, area: Rect, scroll: i32) {
             lines.append(&mut wrapped);
         }
 
-        // Tool calls rendered as "name<20>arguments" (Zig: row(20, -1)).
+        // Tool calls rendered as "name<20>arguments".
         if let Some(tcs) = &msg.tool_calls {
             for tc in tcs {
                 lines.push(Line::from(Span::styled(
@@ -484,9 +471,9 @@ fn messages(f: &mut Frame, clown: &Clown, area: Rect, scroll: i32) {
         )));
     }
 
-    // Scrollback (Zig: `offset = (available - content) + scroll`, i.e.
-    // scroll == 0 is pinned to the bottom, scroll > 0 shifts the window
-    // UP by that many lines, hiding the last `scroll` lines).
+    // Scrollback: scroll == 0 is pinned to the bottom, scroll > 0
+    // shifts the window UP by that many lines, hiding the last
+    // `scroll` lines.
     let available = area.height as i32;
     let total = lines.len() as i32;
     let start = (total - available - scroll).clamp(0, (total - available).max(0));
@@ -513,13 +500,13 @@ fn messages(f: &mut Frame, clown: &Clown, area: Rect, scroll: i32) {
 }
 
 fn footer(f: &mut Frame, clown: &Clown, input: &Input, area: Rect) {
-    // Whole footer is base2 (Zig: `p.frame.fill(.base2)`).
+    // Whole footer is base2.
     f.render_widget(
         Block::default().style(Style::default().bg(theme::BASE2)),
         area,
     );
 
-    // Status row (Zig: `row(&.{ -20, -10, -1 }`):
+    // Status row:
     //   "User:"  -> left, col 0, .text
     //   "Tokens:"-> starts 20 cols from the right, .secondary
     //   number   -> starts 10 cols from the right, .secondary
@@ -556,8 +543,7 @@ fn footer(f: &mut Frame, clown: &Clown, input: &Input, area: Rect) {
         },
     );
 
-    // 3-row input box, inset 2 cols each side, on base1
-    // (Zig: `p.stack(3)` + `fill(.base1)` inside the padded footer).
+    // 3-row input box, inset 2 cols each side, on base1.
     let box_w = iw as u16;
     let box_rect = Rect {
         x: area.x + 2,
@@ -570,9 +556,9 @@ fn footer(f: &mut Frame, clown: &Clown, input: &Input, area: Rect) {
         box_rect,
     );
 
-    // textArea: the buffer wrapped to the box width, clipped to 3 rows,
-    // text in .primary (the box is the single control, always focused),
-    // with a filled .primary cursor at the (col, line) position.
+    // The buffer wrapped to the box width, clipped to 3 rows, text in
+    // .primary, with a filled .primary cursor at the (col, line)
+    // position.
     let content = input.as_str();
     let cursor_byte = input.cursor();
     let wrapped_all = wrap_text(content, box_w as usize);
@@ -619,8 +605,8 @@ fn span_width(s: &Span) -> usize {
     s.content.chars().count()
 }
 
-/// Word wrap (port of tokamak's `util.wordWrap` behavior: greedy word
-/// packing, hard-breaks for over-long tokens, `\n` always breaks).
+/// Word wrap: greedy word packing, hard-breaks for over-long tokens,
+/// `\n` always breaks.
 fn wrap_text(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let mut out: Vec<String> = Vec::new();

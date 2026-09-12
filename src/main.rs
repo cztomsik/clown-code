@@ -9,7 +9,7 @@ use std::io::Write;
 use clown_code::config::Config;
 use clown_code::tui;
 
-/// Port of `src/log.zig` — append everything to `debug.log` in cwd.
+/// Append everything to `debug.log` in cwd.
 fn init_logging() {
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -23,7 +23,7 @@ fn init_logging() {
         .try_init();
 }
 
-/// Port of `src/panic.zig` — write the panic + backtrace to `error.log`.
+/// Write the panic + backtrace to `error.log`.
 fn set_panic_hook() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {

@@ -1,15 +1,12 @@
 //! The model — agent loop, session snapshots, worker thread, and the
 //! `Clown` conversation state machine.
 //!
-//! Port of `src/model.zig` + `tk.ai.agent` (tokamak). In the Zig
-//! original the agent loop runs in a forked child whose messages arrive
-//! over a pipe; here the same flow is a worker thread + mpsc, and the
-//! parent's `agent` is updated exclusively via snapshots — exactly as
-//! in the Zig code (`tick()` → `loadSnapshot()`).
+//! The agent loop runs on a worker thread + mpsc so the TUI can
+//! interrupt an in-flight LLM call; the parent's `agent` is updated
+//! exclusively via worker snapshots.
 
 use std::io;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Instant;
 
@@ -22,34 +19,16 @@ use crate::{prompt, tools};
 
 // =============================================================== agent
 
-/// Agent loop — port of `tk.ai.agent` (`Agent` + `AgentRuntime`).
+// Agent loop. One type holds the conversation, client, and toolbox:
+// there is only ever one agent with fixed request parameters.
 
-#[derive(Debug, Clone)]
-pub struct AgentOptions {
-    pub model: String,
-    /// Names of enabled tools (empty = no tools in the request).
-    pub tools: Vec<String>,
-    pub max_completion_tokens: u32,
-    pub temperature: Option<f32>,
-    pub top_p: Option<f32>,
-    pub auto_retry: u8,
-}
+/// Request parameters (all fixed).
+const MODEL: &str = "default";
+const MAX_COMPLETION_TOKENS: u32 = 32 * 1024;
+const AUTO_RETRY: u8 = 1;
 
-impl Default for AgentOptions {
-    fn default() -> Self {
-        Self {
-            model: "default".into(),
-            tools: Vec::new(),
-            max_completion_tokens: 4096,
-            temperature: None,
-            top_p: None,
-            auto_retry: 1,
-        }
-    }
-}
-
-/// Error names mirror the short `@errorName` strings surfaced in the Zig
-/// TUI ("NoChoice", "RetryFailed", HTTP error names, ...).
+/// Short error names surfaced in the TUI and to the model
+/// ("NoChoice", "RetryFailed", HTTP error names, ...).
 #[derive(Debug)]
 pub enum AgentError {
     NoChoice,
@@ -67,17 +46,19 @@ impl std::fmt::Display for AgentError {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Agent {
-    pub options: AgentOptions,
+    client: Client,
+    toolbox: Toolbox,
     pub messages: Vec<Message>,
     pub total_tokens: u32,
 }
 
 impl Agent {
-    pub fn new(options: AgentOptions) -> Self {
+    pub fn new(client: Client, toolbox: Toolbox) -> Self {
         Self {
-            options,
+            client,
+            toolbox,
             messages: Vec::new(),
             total_tokens: 0,
         }
@@ -89,13 +70,13 @@ impl Agent {
 
     /// Make one LLM call. Returns the assistant message's tool calls (if
     /// any). Retries on empty choices; appends the assistant message to
-    /// the conversation. Mirrors `Agent.next()`.
-    pub fn next(&mut self, runtime: &AgentRuntime) -> Result<Option<Vec<ToolCall>>, AgentError> {
-        let mut retries = self.options.auto_retry + 1;
+    /// the conversation.
+    pub fn step(&mut self) -> Result<Option<Vec<ToolCall>>, AgentError> {
+        let mut retries = AUTO_RETRY + 1;
         while retries > 0 {
             retries -= 1;
-            let res = runtime.create_completion(self)?;
-            // Zig: agent.total_tokens = res.usage.total_tokens
+            let res = self.create_completion()?;
+            // Latest total-token count reported by the server.
             self.total_tokens = res.total_tokens();
 
             let Some(choice) = res.single_choice() else {
@@ -114,10 +95,31 @@ impl Agent {
         Err(AgentError::RetryFailed)
     }
 
+    fn create_completion(&self) -> Result<Response, AgentError> {
+        let request = Request {
+            model: MODEL.into(),
+            messages: self.messages.clone(),
+            tools: Some(self.toolbox.all_tools()),
+            response_format: None,
+            reasoning_effort: None,
+            max_completion_tokens: MAX_COMPLETION_TOKENS,
+            temperature: None,
+            top_p: None,
+        };
+
+        self.client
+            .create_chat_completion(&request)
+            .map_err(AgentError::Client)
+    }
+
     /// Execute all tool calls and append tool result messages.
-    pub fn accept_all(&mut self, runtime: &AgentRuntime, tcs: &[ToolCall]) {
+    /// Never fails — errors become the tool result string.
+    pub fn accept_all(&mut self, tcs: &[ToolCall]) {
         for tc in tcs {
-            self.add_message(Message::tool(runtime.exec_tool(tc), tc.id.clone()));
+            self.add_message(Message::tool(
+                self.toolbox.exec(&tc.function.name, &tc.function.arguments),
+                tc.id.clone(),
+            ));
         }
     }
 
@@ -141,57 +143,13 @@ impl Agent {
     }
 }
 
-#[derive(Clone)]
-pub struct AgentRuntime {
-    client: Arc<Client>,
-    toolbox: Arc<Toolbox>,
-}
-
-impl AgentRuntime {
-    pub fn new(client: Client, toolbox: Arc<Toolbox>) -> Self {
-        Self {
-            client: Arc::new(client),
-            toolbox,
-        }
-    }
-
-    pub fn toolbox(&self) -> &Toolbox {
-        &self.toolbox
-    }
-
-    /// Mirrors `AgentRuntime.createCompletion()`.
-    fn create_completion(&self, agent: &Agent) -> Result<Response, AgentError> {
-        let tools = self.toolbox.query(&agent.options.tools);
-        let request = Request {
-            model: agent.options.model.clone(),
-            messages: agent.messages.clone(),
-            tools: (!tools.is_empty()).then_some(tools),
-            response_format: None,
-            reasoning_effort: None,
-            max_completion_tokens: agent.options.max_completion_tokens,
-            temperature: agent.options.temperature,
-            top_p: agent.options.top_p,
-        };
-
-        self.client
-            .create_chat_completion(&request)
-            .map_err(AgentError::Client)
-    }
-
-    /// Mirrors `AgentRuntime.execTool()` — never fails, errors become the
-    /// result string.
-    pub fn exec_tool(&self, tool: &ToolCall) -> String {
-        self.toolbox
-            .exec(&tool.function.name, &tool.function.arguments)
-    }
-}
-
 // ============================================================= session
 
-/// Session save/load — port of the snapshot code in `src/model.zig`.
+/// Session save/load.
 ///
-/// Files live in the current working directory and are byte-compatible
-/// with the Zig original's `session-*.json` format.
+/// Files live in the current working directory. The JSON shape and key
+/// order are a stable contract — old `session-*.json` files must stay
+/// loadable.
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -199,20 +157,19 @@ pub struct Snapshot {
     pub total_tokens: u32,
 }
 
-/// `session-{YYYY-MM-DD HH:MM:SS UTC}.json` (matches Zig's naming).
+/// `session-{YYYY-MM-DD HH:MM:SS UTC}.json`
 pub fn session_filename() -> String {
     let now = Local::now();
     format!("session-{} UTC.json", now.format("%Y-%m-%d %H:%M:%S"))
 }
 
-/// Save the snapshot to a session file (2-space indent, like Zig).
+/// Save the snapshot to a session file (2-space indent).
 pub fn save_session(snap: &Snapshot) -> io::Result<()> {
     let json = serde_json::to_string_pretty(snap).expect("snapshot is serializable");
     std::fs::write(session_filename(), json)
 }
 
-/// Load a snapshot from a session file. Unknown fields are ignored
-/// (Zig's `.ignore_unknown_fields = true`).
+/// Load a snapshot from a session file. Unknown fields are ignored.
 pub fn load_session(filename: &str) -> io::Result<Snapshot> {
     let contents = std::fs::read_to_string(filename)?;
     let snap: Snapshot = serde_json::from_str(&contents)
@@ -221,7 +178,7 @@ pub fn load_session(filename: &str) -> io::Result<Snapshot> {
 }
 
 /// `/continue` — load the most recent session file, if any.
-/// Same shell glob as the Zig original (`ls -1t session-*.json | head -1`).
+/// Uses a shell glob (`ls -1t session-*.json | head -1`).
 pub fn continue_latest() -> Option<Snapshot> {
     let entry = tools::run_command_entry().handler;
     let out = entry(&serde_json::json!({
@@ -239,20 +196,18 @@ pub fn continue_latest() -> Option<Snapshot> {
 
 // Agent-loop worker thread.
 //
-// Port of the fork-based worker in `src/model.zig`. Zig forks a child
-// process and pipes line-delimited JSON back so the TUI can `SIGKILL`
-// an in-flight LLM call. The Rust equivalent:
+// The agent loop runs on a worker thread so the TUI can interrupt an
+// in-flight LLM call:
 //
-// - the agent loop runs on a dedicated OS thread (blocking reqwest),
-// - messages arrive over an `mpsc` channel as `WorkerMsg` (same
-//   externally-tagged JSON shape as the Zig pipe protocol),
+// - the loop runs on a dedicated OS thread (blocking reqwest),
+// - messages arrive over an `mpsc` channel as `WorkerMsg`,
 // - stopping the worker drops the receiver; the thread's next
 //   `send()` fails and the loop exits. A thread blocked in an HTTP
 //   call finishes it and then bails — the server may keep generating,
 //   but we ignore the result, which matches SIGKILL for our purposes.
 
-/// Port of `WorkerMsg` — a Zig `union(enum)` with the same JSON shape
-/// (externally tagged: `{"snapshot": ...}` / `{"err": ...}`).
+/// Worker message (externally tagged JSON shape:
+/// `{"snapshot": ...}` / `{"err": ...}`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkerMsg {
@@ -269,31 +224,30 @@ impl WorkerMsg {
     }
 }
 
-/// Port of `Worker`.
 pub struct Worker {
     pub started_at: Instant,
     handle: JoinHandle<()>,
 }
 
 impl Worker {
-    /// Port of the `waitpid(WNOHANG)` check in `Clown.tick()`.
+    /// Non-blocking check whether the worker thread has exited.
     pub fn finished(&self) -> bool {
         self.handle.is_finished()
     }
 }
 
-/// Spawn the agent loop. Port of `Clown.start()` (the fork half).
+/// Spawn the agent loop.
 ///
 /// The returned receiver *is* the kill switch: dropping it disconnects
 /// the channel and ends the loop on the next message.
-pub fn spawn_worker(agent: Agent, runtime: AgentRuntime) -> (Worker, Receiver<WorkerMsg>) {
+pub fn spawn_worker(agent: Agent) -> (Worker, Receiver<WorkerMsg>) {
     let (tx, rx) = channel();
     let handle = std::thread::Builder::new()
         .name("clown-worker".into())
         .spawn(move || {
             // Never let a panic in the agent loop kill the process.
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                worker_inner(agent, runtime, &tx);
+                worker_inner(agent, &tx);
             }));
         })
         .expect("failed to spawn worker thread");
@@ -307,10 +261,10 @@ pub fn spawn_worker(agent: Agent, runtime: AgentRuntime) -> (Worker, Receiver<Wo
     )
 }
 
-/// Port of `Clown.workerInner()` — the loop the forked child ran.
-fn worker_inner(mut agent: Agent, runtime: AgentRuntime, tx: &Sender<WorkerMsg>) {
+/// The agent loop that runs on the worker thread.
+fn worker_inner(mut agent: Agent, tx: &Sender<WorkerMsg>) {
     loop {
-        let tcs = match agent.next(&runtime) {
+        let tcs = match agent.step() {
             Ok(tcs) => tcs,
             Err(e) => {
                 let _ = tx.send(WorkerMsg::Err(e.to_string()));
@@ -318,9 +272,9 @@ fn worker_inner(mut agent: Agent, runtime: AgentRuntime, tx: &Sender<WorkerMsg>)
             }
         };
         match tcs {
-            Some(tcs) => agent.accept_all(&runtime, &tcs),
-            // `None` = final answer, no tool calls. The Zig `while`
-            // exits here; one last snapshot goes out after the loop.
+            Some(tcs) => agent.accept_all(&tcs),
+            // `None` = final answer, no tool calls. One last snapshot
+            // goes out after the loop.
             None => break,
         }
         if tx.send(WorkerMsg::snapshot(&agent)).is_err() {
@@ -331,28 +285,21 @@ fn worker_inner(mut agent: Agent, runtime: AgentRuntime, tx: &Sender<WorkerMsg>)
     let _ = tx.send(WorkerMsg::snapshot(&agent));
 }
 
-/// An agent + runtime pointed at a closed localhost port, for tests.
+/// An agent pointed at a closed localhost port, for tests.
 #[cfg(test)]
-pub fn dummy_agent_runtime() -> (Agent, AgentRuntime) {
+pub fn dummy_agent() -> Agent {
     let config = Config {
         base_url: "http://127.0.0.1:9".into(),
         ..Default::default()
     };
-    let toolbox = Arc::new({
-        let mut tb = Toolbox::default();
-        tools::register_all_tools(&mut tb);
-        tb
-    });
-    let agent = Agent::new(Default::default());
-    (agent, AgentRuntime::new(Client::new(&config), toolbox))
+    let mut toolbox = Toolbox::default();
+    tools::register_all_tools(&mut toolbox);
+    Agent::new(Client::new(&config), toolbox)
 }
 
 // =============================================================== clown
 
 // The `Clown` — conversation state machine.
-//
-// Direct port of `Clown` in `src/model.zig` (see the worker section
-// above for the fork→thread translation).
 
 const COMPACT_PROMPT: &str = "Please provide a concise summary of the conversation so far.
 Include:
@@ -363,7 +310,6 @@ Include:
 Keep it under 2000 characters. After providing the summary, stop.";
 
 pub struct Clown {
-    runtime: AgentRuntime,
     /// Parent-side conversation state — updated only via worker snapshots.
     pub agent: Agent,
     worker: Option<Worker>,
@@ -374,28 +320,18 @@ pub struct Clown {
 }
 
 impl Clown {
-    /// Port of `Clown.init()`: agent with all tools enabled, 32k max
-    /// completion tokens, system prompt = PREFIX + AGENTS.md + date/cwd.
+    /// Agent with all tools enabled, system prompt = PREFIX + AGENTS.md
+    /// + date/cwd.
     pub fn new(config: &Config) -> io::Result<Self> {
         let mut toolbox = Toolbox::default();
         tools::register_all_tools(&mut toolbox);
 
-        let runtime = AgentRuntime::new(Client::new(config), toolbox.into());
-
-        let options = AgentOptions {
-            model: "default".into(),
-            max_completion_tokens: 32 * 1024,
-            tools: runtime.toolbox().all_names(),
-            ..Default::default()
-        };
-
-        let mut agent = Agent::new(options);
+        let mut agent = Agent::new(Client::new(config), toolbox);
         agent.add_message(Message::system(
             prompt::load_system_prompt().map_err(io::Error::other)?,
         ));
 
         Ok(Self {
-            runtime,
             agent,
             worker: None,
             receiver: None,
@@ -406,18 +342,18 @@ impl Clown {
 
     // ------------------------------------------------------------- worker
 
-    /// Port of `Clown.start()` — kill any running worker and spawn a new
-    /// one with a clone of the current agent state.
+    /// Kill any running worker and spawn a new one with a clone of the
+    /// current agent state.
     fn start(&mut self) {
         self.stop();
         self.err = None;
-        let (worker, receiver) = spawn_worker(self.agent.clone(), self.runtime.clone());
+        let (worker, receiver) = spawn_worker(self.agent.clone());
         self.worker = Some(worker);
         self.receiver = Some(receiver);
     }
 
-    /// Port of `Clown.stop()`. Dropping the receiver is the kill switch:
-    /// the worker's next send fails and the loop exits.
+    /// Dropping the receiver is the kill switch: the worker's next send
+    /// fails and the loop exits.
     pub fn stop(&mut self) {
         self.worker = None;
         self.receiver = None;
@@ -435,13 +371,11 @@ impl Clown {
             .unwrap_or(0)
     }
 
-    /// Port of `Clown.tick()` — call from the TUI on idle.
+    /// Call from the TUI on idle.
     ///
     /// Returns `true` when observable state changed (a worker message was
-    /// applied or the worker finished), so the caller knows it must
-    /// redraw. The tokamak original only emits `.render` on change; this
-    /// flag is what lets the TUI mirror that instead of redrawing every
-    /// poll tick.
+    /// applied or the worker finished), so the TUI can skip redraws when
+    /// nothing happened.
     pub fn tick(&mut self) -> bool {
         // Drain all pending worker messages (into a local vec so we can
         // mutate self while the receiver is still borrowed).
@@ -483,32 +417,32 @@ impl Clown {
 
     // ---------------------------------------------------------- messages
 
-    /// Port of `Clown.send()` — append the user message and run.
+    /// Append the user message and run.
     pub fn send(&mut self, msg: impl Into<String>) {
         self.agent.add_message(Message::user(msg));
         self.start();
     }
 
-    /// Port of `Clown.clear()` — keep only the system message.
+    /// Keep only the system message.
     pub fn clear(&mut self) {
         self.stop();
         self.agent.messages.truncate(1);
     }
 
-    /// Port of `Clown.clearTools()` — remove all tool messages, keep the rest.
+    /// Remove all tool messages, keep the rest.
     pub fn clear_tools(&mut self) {
         self.stop();
         self.agent.messages.retain(|m| m.role != Role::Tool);
     }
 
-    /// Port of `Clown.compact()` — ask the model to summarize; the actual
-    /// replacement happens in `finish_compact()` when the worker exits.
+    /// Ask the model to summarize; the actual replacement happens in
+    /// `finish_compact()` when the worker exits.
     pub fn compact(&mut self) {
         self.compacting = true;
         self.send(COMPACT_PROMPT);
     }
 
-    /// Port of `Clown.finishCompact()`.
+    /// Complete an in-progress compact once the worker has exited.
     fn finish_compact(&mut self) -> io::Result<()> {
         self.compacting = false;
 
@@ -532,16 +466,16 @@ impl Clown {
         Ok(())
     }
 
-    /// Port of `Clown.retry()` — drop the assistant's response (and tool
-    /// results) and re-run with the same user message.
+    /// Drop the assistant's response (and tool results) and re-run with
+    /// the same user message.
     pub fn retry(&mut self) {
         self.pop_trailing_assistant_and_tools();
         self.start();
     }
 
-    /// Port of `Clown.undo()` + `Agent.undo()` — remove trailing
-    /// assistant/tool messages and the preceding user message, copying it
-    /// back into the input buffer (if it fits), to allow re-prompting.
+    /// Remove trailing assistant/tool messages and the preceding user
+    /// message, copying it back into the input buffer (if it fits), to
+    /// allow re-prompting.
     /// Returns the new input length (0 when there was nothing to undo).
     pub fn undo(&mut self, buf: &mut [u8]) -> usize {
         let Some(msg) = self.agent.undo() else {
@@ -582,12 +516,12 @@ impl Clown {
         self.agent.total_tokens = snap.total_tokens;
     }
 
-    /// Port of `Clown.save()`.
+    /// Save the current conversation to a session file.
     pub fn save(&self) -> io::Result<()> {
         save_session(&self.make_snapshot())
     }
 
-    /// Port of `Clown.load()`.
+    /// Load a conversation from a session file.
     pub fn load(&mut self, filename: &str) -> io::Result<()> {
         self.stop();
         let snap = load_session(filename)?;
@@ -595,7 +529,7 @@ impl Clown {
         Ok(())
     }
 
-    /// Port of `Clown.continue()` — load the most recent session, if any.
+    /// Load the most recent session, if any.
     pub fn continue_latest(&mut self) -> io::Result<()> {
         if let Some(snap) = continue_latest() {
             self.load_snapshot(snap);
@@ -684,7 +618,7 @@ mod tests {
     // ------------------------------------------------- worker unit tests
 
     #[test]
-    fn msg_json_shape_matches_zig() {
+    fn msg_json_shape() {
         let err: String = serde_json::to_string(&WorkerMsg::Err("Timeout".into())).unwrap();
         assert_eq!(err, r#"{"err":"Timeout"}"#);
 
@@ -700,9 +634,9 @@ mod tests {
 
     #[test]
     fn dropping_receiver_stops_worker() {
-        let (agent, runtime) = dummy_agent_runtime();
-        // Use a closed port so next() fails quickly.
-        let (worker, rx) = spawn_worker(agent, runtime);
+        let agent = dummy_agent();
+        // Use a closed port so step() fails quickly.
+        let (worker, rx) = spawn_worker(agent);
         drop(rx); // kill switch
                   // The thread exits once its in-flight request fails and the next
                   // send sees the disconnected channel.

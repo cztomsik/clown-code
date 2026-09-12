@@ -1,12 +1,10 @@
 //! The LLM layer — OpenAI-compatible chat types, HTTP client, and the
 //! tool registry.
 //!
-//! Port of `tk.ai.chat` + `tk.ai.client` + `tk.ai.AgentToolbox`
-//! (tokamak). The wire format is byte-compatible with `tk.ai.chat` so
-//! that session files saved by the Zig original can be loaded and vice
-//! versa. Zig's `jsonSkipNull` serializes every field except `null`
-//! optionals, in declaration order — replicated here with
-//! `skip_serializing_if`.
+//! The wire format is a stable contract: session files saved by older
+//! versions must stay loadable, so field names and order must not
+//! change. Only `null` optionals are omitted (`skip_serializing_if`),
+//! and fields serialize in declaration order.
 
 use std::time::Duration;
 
@@ -18,8 +16,8 @@ use crate::config::Config;
 
 // =========================================================== chat types
 
-/// A message content: a plain string or an array of typed content parts.
-/// Zig's `TextOrContents` union, serialized untagged.
+/// A message content: a plain string or an array of typed content
+/// parts, serialized untagged.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Content {
@@ -28,8 +26,8 @@ pub enum Content {
 }
 
 impl Content {
-    /// Extract plain text (Zig's `Choice.text()`): the string form, or the
-    /// first `text` part in the contents form.
+    /// Extract plain text: the string form, or the first `text` part in
+    /// the contents form.
     pub fn text(&self) -> Option<&str> {
         match self {
             Self::Text(t) => Some(t),
@@ -38,7 +36,7 @@ impl Content {
     }
 }
 
-// NOTE: tokamak's wire format also supports image content parts
+// NOTE: the OpenAI wire format also supports image content parts
 // (`type: "image_url"`); we intentionally don't model it — nothing in
 // clown-code can produce image content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,7 +177,7 @@ pub struct Choice {
 }
 
 impl Choice {
-    /// Zig's `Choice.text()`.
+    /// Plain text of the choice, if any.
     pub fn text(&self) -> Option<&str> {
         self.message.content.as_ref()?.text()
     }
@@ -206,7 +204,7 @@ pub struct Response {
 }
 
 impl Response {
-    /// Zig's `Response.singleChoice()`: only the single-element case.
+    /// The choice, only in the single-element case.
     pub fn single_choice(&self) -> Option<&Choice> {
         (self.choices.len() == 1).then(|| &self.choices[0])
     }
@@ -240,8 +238,8 @@ pub struct Request {
 // Port of `tk.ai.client` — a thin JSON-over-HTTP wrapper used against
 // llama.cpp's OpenAI-compatible endpoint.
 
-/// Short, human-readable error names surfaced in the TUI (Zig parity:
-/// `@errorName(err)` strings like "Timeout", "FileNotFound").
+/// Short, human-readable error names surfaced in the TUI
+/// ("Timeout", "ConnectionFailed", ...).
 pub fn error_name(e: &reqwest::Error) -> String {
     if e.is_timeout() {
         return "Timeout".into();
@@ -256,7 +254,7 @@ pub fn error_name(e: &reqwest::Error) -> String {
     "HttpError".into()
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Client {
     http: HttpClient,
     base_url: String,
@@ -270,7 +268,7 @@ impl Client {
             .expect("failed to build HTTP client");
 
         // Keep the base URL without a trailing slash; the endpoint is
-        // appended below (same as tokamak's `http.Client.request`).
+        // appended below.
         let base_url = config.base_url.trim_end_matches('/').to_string();
 
         Self { http, base_url }
@@ -297,13 +295,13 @@ impl Client {
 
 // Tool registry and dispatch.
 //
-// Port of `tk.ai.AgentToolbox` + `AgentTool`. Schemas are hand-written
-// (5 static tools) instead of generated from arg structs. Errors are
-// returned as plain "ErrorName" strings which become the tool result
-// message — exactly what Zig's `execTool` does with `@errorName(e)`.
+// Schemas are hand-written (5 static tools) instead of generated from
+// arg structs. Errors are returned as plain short "ErrorName" strings
+// which become the tool result message.
 
 pub type ToolHandler = fn(&Value) -> Result<String, String>;
 
+#[derive(Clone)]
 pub struct ToolEntry {
     pub name: &'static str,
     pub description: &'static str,
@@ -311,23 +309,7 @@ pub struct ToolEntry {
     pub handler: ToolHandler,
 }
 
-impl ToolEntry {
-    pub fn new(
-        name: &'static str,
-        description: &'static str,
-        parameters: Value,
-        handler: ToolHandler,
-    ) -> Self {
-        Self {
-            name,
-            description,
-            parameters,
-            handler,
-        }
-    }
-}
-
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Toolbox {
     tools: Vec<ToolEntry>,
 }
@@ -337,16 +319,10 @@ impl Toolbox {
         self.tools.push(entry);
     }
 
-    /// Names of all registered tools (used to enable all tools on an agent).
-    pub fn all_names(&self) -> Vec<String> {
-        self.tools.iter().map(|t| t.name.to_string()).collect()
-    }
-
-    /// Build the request `tools` array for the given names (Zig's `query`).
-    pub fn query(&self, names: &[String]) -> Vec<Tool> {
-        names
+    /// Build the request `tools` array for all registered tools.
+    pub fn all_tools(&self) -> Vec<Tool> {
+        self.tools
             .iter()
-            .filter_map(|name| self.tools.iter().find(|t| t.name == name.as_str()))
             .map(|t| Tool {
                 tool_type: ToolType::Function,
                 function: FunctionSpec {
@@ -360,8 +336,8 @@ impl Toolbox {
     }
 
     /// Run a tool by name with JSON arguments.
-    /// Never fails — unknown tools and handler errors come back as result
-    /// strings (Zig's `execTool`: `error.NotFound`, `@errorName(e)`).
+    /// Never fails — unknown tools and handler errors come back as
+    /// result strings ("NotFound", handler error names).
     pub fn exec(&self, name: &str, args_json: &str) -> String {
         let Some(entry) = self.tools.iter().find(|t| t.name == name) else {
             return "NotFound".into();

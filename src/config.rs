@@ -1,11 +1,9 @@
 //! Application configuration.
-//!
-//! Mirrors `Config` + `EnvOverrides` from `src/main.zig`.
 
 pub struct Config {
     /// Base URL of the OpenAI-compatible LLM server.
     pub base_url: String,
-    /// Request timeout (15 minutes, as in the Zig original).
+    /// Request timeout (15 minutes).
     pub timeout_secs: u64,
 }
 

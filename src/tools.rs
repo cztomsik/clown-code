@@ -1,8 +1,7 @@
 //! AI agent tools: filesystem and shell.
 //!
-//! Port of `src/tools.zig`. Tool names and behaviors are kept identical
-//! (ADR 002: snake_case tool names; names are also part of the prompt
-//! contract, so they must not change).
+//! Tool names and behaviors are part of the prompt contract (and of
+//! saved session files), so they must not change.
 
 use std::io::Read;
 
@@ -22,8 +21,8 @@ pub fn register_all_tools(toolbox: &mut crate::llm::Toolbox) {
     toolbox.add(load_skill_entry());
 }
 
-/// Map `io::Error` to a Zig-style short error name (Zig's
-/// `@errorName(e)` surfaces names like "FileNotFound" to the model).
+/// Map `io::Error` to a short error name like "FileNotFound"
+/// surfaced to the model.
 fn io_err(e: &std::io::Error) -> String {
     match e.kind() {
         std::io::ErrorKind::NotFound => "FileNotFound".into(),
@@ -33,7 +32,7 @@ fn io_err(e: &std::io::Error) -> String {
 }
 
 /// Read a file from the current working directory, up to `MAX_READ_SIZE`
-/// bytes (Zig's `.limited(MAX_READ_SIZE)` truncates, it does not error).
+/// bytes (truncated, not an error).
 fn read_capped(path: &str) -> Result<Vec<u8>, String> {
     let file = std::fs::File::open(path).map_err(|e| io_err(&e))?;
     let mut content = Vec::new();
@@ -68,8 +67,8 @@ fn read_file(args: &Value) -> Result<String, String> {
         return Ok(contents.to_string());
     }
 
-    // Split into lines and format as "N:content" (note: a trailing newline
-    // yields a final empty line, matching Zig's `splitScalar`).
+    // Split into lines and format as "N:content" (note: a trailing
+    // newline yields a final empty line).
     let out = contents
         .split('\n')
         .enumerate()
@@ -79,10 +78,10 @@ fn read_file(args: &Value) -> Result<String, String> {
 }
 
 pub fn read_file_entry() -> ToolEntry {
-    ToolEntry::new(
-        "read_file",
-        "Read the contents of a file",
-        json!({
+    ToolEntry {
+        name: "read_file",
+        description: "Read the contents of a file",
+        parameters: json!({
             "type": "object",
             "properties": {
                 "path": { "type": "string" },
@@ -91,8 +90,8 @@ pub fn read_file_entry() -> ToolEntry {
             "required": ["path"],
             "additionalProperties": false
         }),
-        read_file,
-    )
+        handler: read_file,
+    }
 }
 
 // --------------------------------------------------------------- write_file
@@ -119,10 +118,10 @@ fn write_file(args: &Value) -> Result<String, String> {
 }
 
 pub fn write_file_entry() -> ToolEntry {
-    ToolEntry::new(
-        "write_file",
-        "Write content to a file, creating directories if needed",
-        json!({
+    ToolEntry {
+        name: "write_file",
+        description: "Write content to a file, creating directories if needed",
+        parameters: json!({
             "type": "object",
             "properties": {
                 "path": { "type": "string" },
@@ -131,8 +130,8 @@ pub fn write_file_entry() -> ToolEntry {
             "required": ["path", "content"],
             "additionalProperties": false
         }),
-        write_file,
-    )
+        handler: write_file,
+    }
 }
 
 // ---------------------------------------------------------------- edit_file
@@ -178,10 +177,10 @@ fn edit_file(args: &Value) -> Result<String, String> {
 }
 
 pub fn edit_file_entry() -> ToolEntry {
-    ToolEntry::new(
-        "edit_file",
-        "Edit a file by replacing specific content. Set replace_all=true to replace all occurrences",
-        json!({
+    ToolEntry {
+        name: "edit_file",
+        description: "Edit a file by replacing specific content. Set replace_all=true to replace all occurrences",
+        parameters: json!({
             "type": "object",
             "properties": {
                 "path": { "type": "string" },
@@ -192,8 +191,8 @@ pub fn edit_file_entry() -> ToolEntry {
             "required": ["path", "old_content", "new_content"],
             "additionalProperties": false
         }),
-        edit_file,
-    )
+        handler: edit_file,
+    }
 }
 
 // -------------------------------------------------------------- run_command
@@ -207,15 +206,15 @@ struct RunCommandArgs {
 }
 
 fn to_capped_str(bytes: &[u8]) -> Result<String, String> {
-    // NOTE: Zig validates stdout/stderr as UTF-8 before checking the exit
-    // code and returns error.InvalidUtf8 in that case.
+    // NOTE: stdout/stderr are validated as UTF-8 before checking the
+    // exit code, so non-UTF-8 output errors out even on success.
     std::str::from_utf8(&bytes[..bytes.len().min(MAX_READ_SIZE)])
         .map(|s| s.to_string())
         .map_err(|_| "InvalidUtf8".to_string())
 }
 
 /// Execute a shell command and return its output.
-/// Captures both stdout and stderr. TODO: timeout (same TODO as Zig).
+/// Captures both stdout and stderr. TODO: timeout.
 fn run_command(args: &Value) -> Result<String, String> {
     let args: RunCommandArgs = serde_json::from_value(args.clone()).map_err(|e| e.to_string())?;
 
@@ -231,7 +230,7 @@ fn run_command(args: &Value) -> Result<String, String> {
     let stderr = to_capped_str(&output.stderr)?;
 
     let Some(exit_code) = output.status.code() else {
-        // Process was killed by a signal (Zig: `else => error.CommandFailed`)
+        // Process was killed by a signal.
         return Err("CommandFailed".into());
     };
 
@@ -249,10 +248,10 @@ fn run_command(args: &Value) -> Result<String, String> {
 }
 
 pub fn run_command_entry() -> ToolEntry {
-    ToolEntry::new(
-        "run_command",
-        "Execute a shell command and return its output",
-        json!({
+    ToolEntry {
+        name: "run_command",
+        description: "Execute a shell command and return its output",
+        parameters: json!({
             "type": "object",
             "properties": {
                 "command": { "type": "string" },
@@ -261,13 +260,13 @@ pub fn run_command_entry() -> ToolEntry {
             "required": ["command"],
             "additionalProperties": false
         }),
-        run_command,
-    )
+        handler: run_command,
+    }
 }
 
 // --------------------------------------------------------------- load_skill
 
-/// Built-in skill, embedded at compile time (Zig: `@embedFile("skills/init.md")`).
+/// Built-in skill, embedded at compile time.
 pub const BUILTIN_INIT: &str = include_str!("skills/init.md");
 
 #[derive(Deserialize)]
@@ -285,7 +284,7 @@ fn load_skill(args: &Value) -> Result<String, String> {
         return Ok(BUILTIN_INIT.to_string());
     }
 
-    // TODO: Check for path traversal (same TODO as the Zig original)
+    // TODO: Check for path traversal.
     let file = std::fs::File::open(format!("skills/{name}.md", name = args.skill_name))
         .map_err(|e| io_err(&e))?;
     let mut content = Vec::new();
@@ -296,10 +295,10 @@ fn load_skill(args: &Value) -> Result<String, String> {
 }
 
 pub fn load_skill_entry() -> ToolEntry {
-    ToolEntry::new(
-        "load_skill",
-        "Load a set of specialized instructions (a skill) into the current context to improve performance on a specific task.",
-        json!({
+    ToolEntry {
+        name: "load_skill",
+        description: "Load a set of specialized instructions (a skill) into the current context to improve performance on a specific task.",
+        parameters: json!({
             "type": "object",
             "properties": {
                 "skill_name": { "type": "string" }
@@ -307,6 +306,6 @@ pub fn load_skill_entry() -> ToolEntry {
             "required": ["skill_name"],
             "additionalProperties": false
         }),
-        load_skill,
-    )
+        handler: load_skill,
+    }
 }
