@@ -278,7 +278,10 @@ fn worker_inner(mut agent: Agent, tx: &Sender<WorkerMsg>) {
             // Final answer, no tool calls — done.
             return;
         };
-        // The tool results, as they are appended.
+        // The tool results, as they are appended. `before` must be
+        // re-captured here, after the assistant message above — the
+        // original index would re-send that message on every turn.
+        let before = agent.messages.len();
         agent.accept_all(&tcs);
         if !send_new(&agent, before, tx) {
             return;
