@@ -252,22 +252,6 @@ pub struct Request {
 
 // A thin JSON-over-HTTP wrapper for llama.cpp's OpenAI-compatible endpoint.
 
-/// Short, human-readable error names surfaced in the TUI
-/// ("Timeout", "ConnectionFailed", ...).
-pub fn error_name(e: &reqwest::Error) -> String {
-    if e.is_timeout() {
-        return "Timeout".into();
-    }
-    if e.is_connect() {
-        return "ConnectionFailed".into();
-    }
-    if e.is_request() {
-        // JSON parse / send errors
-        return "RequestFailed".into();
-    }
-    "HttpError".into()
-}
-
 #[derive(Debug, Clone)]
 pub struct Client {
     http: HttpClient,
@@ -288,40 +272,40 @@ impl Client {
         Self { http, base_url }
     }
 
-    pub fn create_chat_completion(&self, params: &Request) -> Result<Response, String> {
+    pub fn create_chat_completion(&self, params: &Request) -> anyhow::Result<Response> {
         let req = self
             .http
             .post(format!("{}/v1/chat/completions", self.base_url));
 
-        let res = req.json(params).send().map_err(|e| error_name(&e))?;
+        let res = req.json(params).send()?;
 
         let status = res.status();
         if !status.is_success() {
             let body = res.text().unwrap_or_default();
-            return Err(format!("HttpError: server returned {status}: {body}"));
+            return Err(anyhow::anyhow!("server returned {status}: {body}"));
         }
 
-        res.json::<Response>().map_err(|e| error_name(&e))
+        Ok(res.json::<Response>()?)
     }
 
     /// List the model ids offered by the server (`GET /v1/models`).
     /// Short timeout — this is a discovery call, not a completion.
-    pub fn list_models(&self) -> Result<Vec<String>, String> {
+    pub fn list_models(&self) -> anyhow::Result<Vec<String>> {
         const TIMEOUT: Duration = Duration::from_secs(10);
 
         let res = self
             .http
             .get(format!("{}/v1/models", self.base_url))
             .timeout(TIMEOUT)
-            .send()
-            .map_err(|e| error_name(&e))?;
+            .send()?;
 
         let status = res.status();
         if !status.is_success() {
-            return Err(format!("HttpError: server returned {status}"));
+            let body = res.text().unwrap_or_default();
+            return Err(anyhow::anyhow!("server returned {status}: {body}"));
         }
 
-        let list: ModelList = res.json().map_err(|e| error_name(&e))?;
+        let list: ModelList = res.json()?;
         Ok(list.data.into_iter().map(|m| m.id).collect())
     }
 }

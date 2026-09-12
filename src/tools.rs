@@ -257,7 +257,8 @@ fn run_command(args: &Value) -> Result<String, String> {
 pub fn run_command_entry() -> ToolEntry {
     ToolEntry {
         name: "run_command",
-        description: "Execute a shell command in the current working directory and return its output.",
+        description:
+            "Execute a shell command in the current working directory and return its output.",
         parameters: json!({
             "type": "object",
             "properties": {

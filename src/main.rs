@@ -21,23 +21,16 @@ fn init_logging() {
         .try_init();
 }
 
-fn main() -> std::io::Result<()> {
+fn main() -> anyhow::Result<()> {
     init_logging();
 
     let config = Config::from_env();
     tracing::debug!("base_url = {}", config.base_url);
 
     if std::env::args().any(|a| a == "--print-prompt") {
-        match clown_code::prompt::load_system_prompt() {
-            Ok(prompt) => print!("{prompt}"),
-            Err(e) => {
-                eprintln!("failed to load system prompt: {e}");
-                std::process::exit(1);
-            }
-        }
+        print!("{}", clown_code::prompt::load_system_prompt()?);
         return Ok(());
     }
 
-    tui::run(&config)?;
-    Ok(())
+    tui::run(&config)
 }

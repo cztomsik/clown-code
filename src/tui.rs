@@ -187,7 +187,7 @@ pub struct Tui {
     last_ctrl_c: Option<Instant>,
 }
 
-pub fn run(config: &Config) -> io::Result<()> {
+pub fn run(config: &Config) -> anyhow::Result<()> {
     let clown = Clown::new(config)?;
     let mut tui = Tui {
         clown,
@@ -206,7 +206,8 @@ pub fn run(config: &Config) -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
-    tui.run(&mut terminal)
+    tui.run(&mut terminal)?;
+    Ok(())
 }
 
 impl Tui {
@@ -326,12 +327,12 @@ impl Tui {
             }
             "save" => {
                 if let Err(e) = self.clown.save() {
-                    tracing::error!("save failed: {e}");
+                    tracing::error!("save failed: {e:?}");
                 }
             }
             "load" => {
                 if let Err(e) = self.clown.load(arg) {
-                    tracing::error!("load failed: {e}");
+                    tracing::error!("load failed: {e:?}");
                 }
             }
             "continue" => self.clown.continue_latest(),
@@ -364,7 +365,7 @@ impl Tui {
                         .map(|id| format!("{} {id}", if *id == current { "*" } else { " " }))
                         .collect::<Vec<_>>()
                         .join("\n"),
-                    Err(e) => format!("Model list failed: {e}"),
+                    Err(e) => format!("Model list failed: {e:?}"),
                 });
             }
             "model" => {

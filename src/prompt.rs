@@ -5,7 +5,7 @@
 
 pub const PREFIX: &str = include_str!("PREFIX.md");
 
-pub fn load_system_prompt() -> Result<String, String> {
+pub fn load_system_prompt() -> std::io::Result<String> {
     // AGENTS.md, falling back to CLOWN.md, else empty.
     let project_context = ["AGENTS.md", "CLOWN.md"]
         .iter()
@@ -13,7 +13,7 @@ pub fn load_system_prompt() -> Result<String, String> {
         .unwrap_or_default();
 
     let today = chrono::Local::now().format("%Y-%m-%d");
-    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let cwd = std::env::current_dir()?;
 
     Ok(format!(
         "{PREFIX}{}{}\n\nCurrent date: {today}\nCurrent working directory: {}\n",

@@ -5,11 +5,11 @@
 //! interrupt an in-flight LLM call; each new message is appended to the
 //! parent's `agent` as it is produced.
 
-use std::io;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
+use anyhow::Context;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 
@@ -49,7 +49,7 @@ impl Agent {
     }
 
     /// List the model ids offered by the server (for `/models`).
-    pub fn list_models(&self) -> Result<Vec<String>, String> {
+    pub fn list_models(&self) -> anyhow::Result<Vec<String>> {
         self.client.list_models()
     }
 
@@ -60,7 +60,7 @@ impl Agent {
     /// Make one LLM call. Returns the assistant message's tool calls (if
     /// any). Retries on empty choices; appends the assistant message to
     /// the conversation.
-    pub fn step(&mut self) -> Result<Option<Vec<ToolCall>>, String> {
+    pub fn step(&mut self) -> anyhow::Result<Option<Vec<ToolCall>>> {
         let mut retries = AUTO_RETRY + 1;
         while retries > 0 {
             retries -= 1;
@@ -69,7 +69,7 @@ impl Agent {
             self.total_tokens = res.total_tokens();
 
             let Some(choice) = res.single_choice() else {
-                return Err("NoChoice".into());
+                return Err(anyhow::anyhow!("no choices in response"));
             };
             let is_empty = choice.text().is_none_or(str::is_empty);
             let is_corrupt = is_corrupt_tool_calls(choice.message.tool_calls.as_deref());
@@ -86,10 +86,12 @@ impl Agent {
             self.add_message(choice.message.clone());
             return Ok(choice.message.tool_calls.clone());
         }
-        Err("RetryFailed".into())
+        Err(anyhow::anyhow!(
+            "retries exhausted (empty or corrupt choices)"
+        ))
     }
 
-    fn create_completion(&self) -> Result<Response, String> {
+    fn create_completion(&self) -> anyhow::Result<Response> {
         let request = Request {
             model: self.model.clone(),
             messages: self.messages.clone(),
@@ -190,16 +192,17 @@ pub fn session_filename() -> String {
 }
 
 /// Save the snapshot to a session file (2-space indent).
-pub fn save_session(snap: &Snapshot) -> io::Result<()> {
+pub fn save_session(snap: &Snapshot) -> anyhow::Result<()> {
     let json = serde_json::to_string_pretty(snap).expect("snapshot is serializable");
-    std::fs::write(session_filename(), json)
+    std::fs::write(session_filename(), json)?;
+    Ok(())
 }
 
 /// Load a snapshot from a session file. Unknown fields are ignored.
-pub fn load_session(filename: &str) -> io::Result<Snapshot> {
+pub fn load_session(filename: &str) -> anyhow::Result<Snapshot> {
     let contents = std::fs::read_to_string(filename)?;
-    let snap: Snapshot = serde_json::from_str(&contents)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let snap: Snapshot =
+        serde_json::from_str(&contents).with_context(|| format!("parsing {filename}"))?;
     Ok(snap)
 }
 
@@ -237,7 +240,7 @@ pub fn continue_latest() -> Option<Snapshot> {
 enum WorkerMsg {
     Message(Message),
     Tokens(u32),
-    Err(String),
+    Err(anyhow::Error),
 }
 
 /// Spawn the agent loop.
@@ -353,7 +356,7 @@ impl Clown {
     /// AGENTS.md + date/cwd. The model is auto-discovered: the first
     /// id from the server's model list, falling back to
     /// `DEFAULT_MODEL` when the endpoint is unreachable or empty.
-    pub fn new(config: &Config) -> io::Result<Self> {
+    pub fn new(config: &Config) -> anyhow::Result<Self> {
         let mut toolbox = Toolbox::default();
         tools::register_all_tools(&mut toolbox);
 
@@ -366,15 +369,13 @@ impl Clown {
                 DEFAULT_MODEL.to_string()
             }),
             Err(e) => {
-                tracing::warn!("model discovery failed ({e}); using {DEFAULT_MODEL}");
+                tracing::warn!("model discovery failed ({e:?}); using {DEFAULT_MODEL}");
                 DEFAULT_MODEL.to_string()
             }
         };
 
         let mut agent = Agent::new(client, model, toolbox);
-        agent.add_message(Message::system(
-            prompt::load_system_prompt().map_err(io::Error::other)?,
-        ));
+        agent.add_message(Message::system(prompt::load_system_prompt()?));
 
         Ok(Self {
             agent,
@@ -436,7 +437,7 @@ impl Clown {
             match msg {
                 WorkerMsg::Message(m) => self.agent.add_message(m),
                 WorkerMsg::Tokens(t) => self.agent.total_tokens = t,
-                WorkerMsg::Err(e) => self.err = Some(e),
+                WorkerMsg::Err(e) => self.err = Some(format!("{e:?}")),
             }
         }
 
@@ -445,7 +446,7 @@ impl Clown {
             self.stop();
 
             if self.compacting {
-                let _ = self.finish_compact();
+                self.finish_compact();
             }
         }
     }
@@ -483,16 +484,25 @@ impl Clown {
     }
 
     /// Complete an in-progress compact once the worker has exited.
-    fn finish_compact(&mut self) -> io::Result<()> {
+    /// Never fails.
+    fn finish_compact(&mut self) {
         self.compacting = false;
 
-        let last = match self.agent.messages.last() {
-            Some(m) if m.role == Role::Assistant => m,
-            _ => return Ok(()),
+        let Some(last) = self
+            .agent
+            .messages
+            .last()
+            .filter(|m| m.role == Role::Assistant)
+        else {
+            return;
         };
-        let summary = match last.content.as_ref().and_then(|c| c.text()) {
-            Some(t) => t.to_string(),
-            None => return Ok(()),
+        let Some(summary) = last
+            .content
+            .as_ref()
+            .and_then(|c| c.text())
+            .map(str::to_string)
+        else {
+            return;
         };
 
         self.clear();
@@ -503,7 +513,6 @@ impl Clown {
 {summary}
 </compacted summary>"
         ));
-        Ok(())
     }
 
     /// Drop the assistant's response (and tool results) and re-run with
@@ -552,7 +561,7 @@ impl Clown {
     }
 
     /// Save the current conversation to a session file.
-    pub fn save(&self) -> io::Result<()> {
+    pub fn save(&self) -> anyhow::Result<()> {
         let snap = Snapshot {
             messages: self.agent.messages.clone(),
             total_tokens: self.agent.total_tokens,
@@ -561,7 +570,7 @@ impl Clown {
     }
 
     /// Load a conversation from a session file.
-    pub fn load(&mut self, filename: &str) -> io::Result<()> {
+    pub fn load(&mut self, filename: &str) -> anyhow::Result<()> {
         self.stop();
         let snap = load_session(filename)?;
         self.apply_snapshot(snap);
