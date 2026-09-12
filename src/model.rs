@@ -2,8 +2,8 @@
 //! `Clown` conversation state machine.
 //!
 //! The agent loop runs on a worker thread + mpsc so the TUI can
-//! interrupt an in-flight LLM call; the parent's `agent` is updated
-//! exclusively via worker snapshots.
+//! interrupt an in-flight LLM call; each new message is appended to the
+//! parent's `agent` as it is produced.
 
 use std::io;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -151,7 +151,7 @@ impl Agent {
 /// order are a stable contract — old `session-*.json` files must stay
 /// loadable.
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     pub messages: Vec<Message>,
     pub total_tokens: u32,
@@ -200,47 +200,25 @@ pub fn continue_latest() -> Option<Snapshot> {
 // in-flight LLM call:
 //
 // - the loop runs on a dedicated OS thread (blocking reqwest),
-// - messages arrive over an `mpsc` channel as `WorkerMsg`,
+// - each new message is sent over an `mpsc` channel as it is created,
 // - stopping the worker drops the receiver; the thread's next
 //   `send()` fails and the loop exits. A thread blocked in an HTTP
 //   call finishes it and then bails — the server may keep generating,
-//   but we ignore the result, which matches SIGKILL for our purposes.
+//   but we ignore the result.
 
-/// Worker message (externally tagged JSON shape:
-/// `{"snapshot": ...}` / `{"err": ...}`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkerMsg {
-    Snapshot(Snapshot),
+/// One unit of progress from the worker. `std::mpsc` is reliable and
+/// ordered, so the parent can append every message exactly once.
+enum WorkerMsg {
+    Message(Message),
+    Tokens(u32),
     Err(String),
-}
-
-impl WorkerMsg {
-    pub fn snapshot(agent: &Agent) -> Self {
-        Self::Snapshot(Snapshot {
-            messages: agent.messages.clone(),
-            total_tokens: agent.total_tokens,
-        })
-    }
-}
-
-pub struct Worker {
-    pub started_at: Instant,
-    handle: JoinHandle<()>,
-}
-
-impl Worker {
-    /// Non-blocking check whether the worker thread has exited.
-    pub fn finished(&self) -> bool {
-        self.handle.is_finished()
-    }
 }
 
 /// Spawn the agent loop.
 ///
 /// The returned receiver *is* the kill switch: dropping it disconnects
 /// the channel and ends the loop on the next message.
-pub fn spawn_worker(agent: Agent) -> (Worker, Receiver<WorkerMsg>) {
+fn spawn_worker(agent: Agent) -> (JoinHandle<()>, Receiver<WorkerMsg>) {
     let (tx, rx) = channel();
     let handle = std::thread::Builder::new()
         .name("clown-worker".into())
@@ -252,18 +230,13 @@ pub fn spawn_worker(agent: Agent) -> (Worker, Receiver<WorkerMsg>) {
         })
         .expect("failed to spawn worker thread");
 
-    (
-        Worker {
-            started_at: Instant::now(),
-            handle,
-        },
-        rx,
-    )
+    (handle, rx)
 }
 
 /// The agent loop that runs on the worker thread.
 fn worker_inner(mut agent: Agent, tx: &Sender<WorkerMsg>) {
     loop {
+        let before = agent.messages.len();
         let tcs = match agent.step() {
             Ok(tcs) => tcs,
             Err(e) => {
@@ -271,18 +244,31 @@ fn worker_inner(mut agent: Agent, tx: &Sender<WorkerMsg>) {
                 return;
             }
         };
-        match tcs {
-            Some(tcs) => agent.accept_all(&tcs),
-            // `None` = final answer, no tool calls. One last snapshot
-            // goes out after the loop.
-            None => break,
+        // The assistant message, as it was appended.
+        if !send_new(&agent, before, tx) {
+            return;
         }
-        if tx.send(WorkerMsg::snapshot(&agent)).is_err() {
-            // Receiver dropped — the worker was stopped.
+        let Some(tcs) = tcs else {
+            // Final answer, no tool calls — done.
+            return;
+        };
+        // The tool results, as they are appended.
+        agent.accept_all(&tcs);
+        if !send_new(&agent, before, tx) {
             return;
         }
     }
-    let _ = tx.send(WorkerMsg::snapshot(&agent));
+}
+
+/// Send every message in `agent.messages[from..]` plus the latest
+/// token count. Returns false when the receiver has been dropped.
+fn send_new(agent: &Agent, from: usize, tx: &Sender<WorkerMsg>) -> bool {
+    for msg in &agent.messages[from..] {
+        if tx.send(WorkerMsg::Message(msg.clone())).is_err() {
+            return false;
+        }
+    }
+    tx.send(WorkerMsg::Tokens(agent.total_tokens)).is_ok()
 }
 
 /// An agent pointed at a closed localhost port, for tests.
@@ -310,9 +296,11 @@ Include:
 Keep it under 2000 characters. After providing the summary, stop.";
 
 pub struct Clown {
-    /// Parent-side conversation state — updated only via worker snapshots.
+    /// Parent-side conversation state — worker messages are appended to
+    /// it as they arrive.
     pub agent: Agent,
-    worker: Option<Worker>,
+    worker: Option<JoinHandle<()>>,
+    started_at: Option<Instant>,
     receiver: Option<Receiver<WorkerMsg>>,
     compacting: bool,
     /// Last worker error, surfaced in the TUI.
@@ -334,6 +322,7 @@ impl Clown {
         Ok(Self {
             agent,
             worker: None,
+            started_at: None,
             receiver: None,
             compacting: false,
             err: None,
@@ -349,6 +338,7 @@ impl Clown {
         self.err = None;
         let (worker, receiver) = spawn_worker(self.agent.clone());
         self.worker = Some(worker);
+        self.started_at = Some(Instant::now());
         self.receiver = Some(receiver);
     }
 
@@ -356,6 +346,7 @@ impl Clown {
     /// fails and the loop exits.
     pub fn stop(&mut self) {
         self.worker = None;
+        self.started_at = None;
         self.receiver = None;
     }
 
@@ -365,10 +356,7 @@ impl Clown {
 
     /// Seconds since the current worker started (0 when idle).
     pub fn elapsed(&self) -> u64 {
-        self.worker
-            .as_ref()
-            .map(|w| w.started_at.elapsed().as_secs())
-            .unwrap_or(0)
+        self.started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0)
     }
 
     /// Call from the TUI on idle.
@@ -393,22 +381,20 @@ impl Clown {
         let had_msgs = !pending.is_empty();
         for msg in pending {
             match msg {
-                WorkerMsg::Snapshot(s) => self.load_snapshot(s),
+                WorkerMsg::Message(m) => self.agent.add_message(m),
+                WorkerMsg::Tokens(t) => self.agent.total_tokens = t,
                 WorkerMsg::Err(e) => self.err = Some(e),
             }
         }
 
         // Worker finished.
         let mut finished = false;
-        if let Some(worker) = &self.worker {
-            if worker.finished() {
-                self.worker = None;
-                self.receiver = None;
-                finished = true;
+        if self.worker.as_ref().is_some_and(|w| w.is_finished()) {
+            self.stop();
+            finished = true;
 
-                if self.compacting {
-                    let _ = self.finish_compact();
-                }
+            if self.compacting {
+                let _ = self.finish_compact();
             }
         }
 
@@ -504,35 +490,32 @@ impl Clown {
 
     // ----------------------------------------------------------- sessions
 
-    fn make_snapshot(&self) -> Snapshot {
-        Snapshot {
-            messages: self.agent.messages.clone(),
-            total_tokens: self.agent.total_tokens,
-        }
-    }
-
-    fn load_snapshot(&mut self, snap: Snapshot) {
+    fn apply_snapshot(&mut self, snap: Snapshot) {
         self.agent.messages = snap.messages;
         self.agent.total_tokens = snap.total_tokens;
     }
 
     /// Save the current conversation to a session file.
     pub fn save(&self) -> io::Result<()> {
-        save_session(&self.make_snapshot())
+        let snap = Snapshot {
+            messages: self.agent.messages.clone(),
+            total_tokens: self.agent.total_tokens,
+        };
+        save_session(&snap)
     }
 
     /// Load a conversation from a session file.
     pub fn load(&mut self, filename: &str) -> io::Result<()> {
         self.stop();
         let snap = load_session(filename)?;
-        self.load_snapshot(snap);
+        self.apply_snapshot(snap);
         Ok(())
     }
 
     /// Load the most recent session, if any.
     pub fn continue_latest(&mut self) -> io::Result<()> {
         if let Some(snap) = continue_latest() {
-            self.load_snapshot(snap);
+            self.apply_snapshot(snap);
         }
         Ok(())
     }
@@ -618,21 +601,6 @@ mod tests {
     // ------------------------------------------------- worker unit tests
 
     #[test]
-    fn msg_json_shape() {
-        let err: String = serde_json::to_string(&WorkerMsg::Err("Timeout".into())).unwrap();
-        assert_eq!(err, r#"{"err":"Timeout"}"#);
-
-        let snap = WorkerMsg::Snapshot(Snapshot {
-            messages: vec![],
-            total_tokens: 7,
-        });
-        assert_eq!(
-            serde_json::to_string(&snap).unwrap(),
-            r#"{"snapshot":{"messages":[],"total_tokens":7}}"#
-        );
-    }
-
-    #[test]
     fn dropping_receiver_stops_worker() {
         let agent = dummy_agent();
         // Use a closed port so step() fails quickly.
@@ -641,13 +609,13 @@ mod tests {
                   // The thread exits once its in-flight request fails and the next
                   // send sees the disconnected channel.
         for _ in 0..1000 {
-            if worker.finished() {
+            if worker.is_finished() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(
-            worker.finished(),
+            worker.is_finished(),
             "worker should exit once the receiver is dropped"
         );
     }

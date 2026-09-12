@@ -39,7 +39,7 @@ The following tools are available in the environment:
 ## Architecture Notes
 
 - **TUI Framework**: ratatui + crossterm.
-- **AI Communication**: The agent loop runs in a worker thread and reports back over an mpsc channel as `WorkerMsg`-style results (snapshot or error), so the TUI can interrupt an in-flight LLM call. The parent's state is updated exclusively via snapshots.
+- **AI Communication**: The agent loop runs in a worker thread and reports back over an mpsc channel as incremental `WorkerMsg`s (each new message as it is created, token count, or error), so the TUI can interrupt an in-flight LLM call. The parent's message history is appended to as messages arrive.
 - **System Prompt**: Composed from `PREFIX.md` (embedded at compile time) + `AGENTS.md` (project context loaded at runtime from cwd, up to 1MB), plus today's date and current working directory.
 - **Conversation Persistence**: Snapshots (messages, total tokens) can be saved to `session-YYYY-MM-DD HH:MM:SS UTC.json` and reloaded. The `/continue` command auto-loads the most recent session. JSON key order is preserved (part of the session-file contract).
 - **Skills System**: `load_skill` tool loads `.md` files from the `skills/` directory (or built-in skills like `init`), injecting their contents as system instructions.
