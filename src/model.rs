@@ -254,16 +254,21 @@ fn send_new(agent: &Agent, from: usize, tx: &Sender<WorkerMsg>) -> bool {
     tx.send(WorkerMsg::Tokens(agent.total_tokens)).is_ok()
 }
 
+/// Config pointing at a closed localhost port, for tests.
+#[cfg(test)]
+pub fn dummy_config() -> Config {
+    Config {
+        base_url: "http://127.0.0.1:9".into(),
+        ..Default::default()
+    }
+}
+
 /// An agent pointed at a closed localhost port, for tests.
 #[cfg(test)]
 pub fn dummy_agent() -> Agent {
-    let config = Config {
-        base_url: "http://127.0.0.1:9".into(),
-        ..Default::default()
-    };
     let mut toolbox = Toolbox::default();
     tools::register_all_tools(&mut toolbox);
-    Agent::new(Client::new(&config), toolbox)
+    Agent::new(Client::new(&dummy_config()), toolbox)
 }
 
 // =============================================================== clown
@@ -349,12 +354,9 @@ impl Clown {
             .unwrap_or(0)
     }
 
-    /// Call from the TUI on idle.
-    ///
-    /// Returns `true` when observable state changed (a worker message was
-    /// applied or the worker finished), so the TUI can skip redraws when
-    /// nothing happened.
-    pub fn tick(&mut self) -> bool {
+    /// Call from the TUI on idle: drain pending worker messages into
+    /// the conversation, and finish the worker if its thread has exited.
+    pub fn tick(&mut self) {
         // Drain all pending worker messages (into a local vec so we can
         // mutate self while the receiver is still borrowed).
         let pending: Vec<WorkerMsg> = self
@@ -368,7 +370,6 @@ impl Clown {
                 v
             })
             .unwrap_or_default();
-        let had_msgs = !pending.is_empty();
         for msg in pending {
             match msg {
                 WorkerMsg::Message(m) => self.agent.add_message(m),
@@ -378,17 +379,13 @@ impl Clown {
         }
 
         // Worker finished.
-        let mut finished = false;
         if self.worker.as_ref().is_some_and(|w| w.handle.is_finished()) {
             self.stop();
-            finished = true;
 
             if self.compacting {
                 let _ = self.finish_compact();
             }
         }
-
-        had_msgs || finished
     }
 
     // ---------------------------------------------------------- messages
@@ -491,12 +488,11 @@ impl Clown {
         Ok(())
     }
 
-    /// Load the most recent session, if any.
-    pub fn continue_latest(&mut self) -> io::Result<()> {
+    /// Load the most recent session, if any. Never fails.
+    pub fn continue_latest(&mut self) {
         if let Some(snap) = continue_latest() {
             self.apply_snapshot(snap);
         }
-        Ok(())
     }
 }
 
@@ -556,11 +552,7 @@ mod tests {
     /// connection error comes back over the channel → tick surfaces it.
     #[test]
     fn worker_error_surfaces_in_tick() {
-        let mut c = Clown::new(&Config {
-            base_url: "http://127.0.0.1:9".into(),
-            ..Default::default()
-        })
-        .expect("clown init");
+        let mut c = Clown::new(&dummy_config()).expect("clown init");
         c.send("hello");
         assert!(c.busy());
 

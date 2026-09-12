@@ -5,6 +5,10 @@
 //! versions must stay loadable, so field names and order must not
 //! change. Only `null` optionals are omitted (`skip_serializing_if`),
 //! and fields serialize in declaration order.
+//!
+//! The request/response structs mirror the full OpenAI-compatible
+//! schema as returned by the server — keep every field, even the ones
+//! we never read or write; the server may still populate them.
 
 use std::time::Duration;
 
@@ -235,8 +239,7 @@ pub struct Request {
 
 // ============================================================== client
 
-// Port of `tk.ai.client` — a thin JSON-over-HTTP wrapper used against
-// llama.cpp's OpenAI-compatible endpoint.
+// A thin JSON-over-HTTP wrapper for llama.cpp's OpenAI-compatible endpoint.
 
 /// Short, human-readable error names surfaced in the TUI
 /// ("Timeout", "ConnectionFailed", ...).

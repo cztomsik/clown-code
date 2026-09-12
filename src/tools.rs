@@ -214,7 +214,7 @@ fn to_capped_str(bytes: &[u8]) -> Result<String, String> {
 }
 
 /// Execute a shell command and return its output.
-/// Captures both stdout and stderr. TODO: timeout.
+/// Captures both stdout and stderr.
 fn run_command(args: &Value) -> Result<String, String> {
     let args: RunCommandArgs = serde_json::from_value(args.clone()).map_err(|e| e.to_string())?;
 

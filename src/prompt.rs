@@ -1,4 +1,4 @@
-//! System prompt assembly — port of `Clown.loadSystemPrompt()`.
+//! System prompt assembly.
 //!
 //! `PREFIX.md` (embedded) + `AGENTS.md`/`CLOWN.md` (cwd, up to 1MB)
 //! + today's date + resolved cwd path.

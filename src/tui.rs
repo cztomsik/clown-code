@@ -40,8 +40,6 @@ use crate::model::Clown;
 // (tabs become spaces). Enter does NOT insert a newline here — the
 // main loop always captures it to send.
 
-const MAX_LEN: usize = 4096; // bytes
-
 #[derive(Default)]
 pub struct Input {
     buf: String,
@@ -59,15 +57,8 @@ impl Input {
 
     /// Replace the buffer contents (used by `/undo`).
     pub fn set(&mut self, text: &str) {
-        // Cap at MAX_LEN bytes, on a char boundary.
-        let mut buf = text.to_string();
-        if buf.len() > MAX_LEN {
-            while buf.len() > MAX_LEN {
-                buf.pop();
-            }
-        }
-        self.cursor = buf.len();
-        self.buf = buf;
+        self.buf = text.to_string();
+        self.cursor = self.buf.len();
     }
 
     pub fn take(&mut self) -> String {
@@ -138,27 +129,16 @@ impl Input {
         }
     }
 
-    /// Port of `pasteText` (preserve_newlines mode): tabs become spaces,
-    /// everything else is inserted verbatim at the cursor.
+    /// Insert pasted text at the cursor: tabs become spaces, everything
+    /// else (including newlines) is inserted verbatim.
     pub fn paste(&mut self, text: &str) {
-        let mut insert: String = text
-            .chars()
-            .map(|c| if c == '\t' { ' ' } else { c })
-            .collect();
-        // Enforce the byte cap.
-        while insert.len() + self.buf.len() > MAX_LEN {
-            let chars: Vec<char> = insert.chars().collect();
-            insert = chars[..chars.len() - 1].iter().collect();
-        }
+        let insert: String = text.chars().map(|c| if c == '\t' { ' ' } else { c }).collect();
         let at = self.cursor;
         self.buf.insert_str(at, &insert);
         self.cursor = at + insert.len();
     }
 
     fn insert_char(&mut self, c: char) -> bool {
-        if self.buf.len() + c.len_utf8() > MAX_LEN {
-            return false;
-        }
         self.buf.insert(self.cursor, c);
         self.cursor += c.len_utf8();
         true
@@ -253,7 +233,7 @@ impl Tui {
             }
 
             // Drain new worker messages into the conversation.
-            let _ = self.clown.tick();
+            self.clown.tick();
 
             // Advance the tick schedule (fast-forward after a stall).
             while Instant::now() >= next_tick {
@@ -339,11 +319,7 @@ impl Tui {
                     tracing::error!("load failed: {e}");
                 }
             }
-            "continue" => {
-                if let Err(e) = self.clown.continue_latest() {
-                    tracing::error!("continue failed: {e}");
-                }
-            }
+            "continue" => self.clown.continue_latest(),
             _ => {}
         }
         true
