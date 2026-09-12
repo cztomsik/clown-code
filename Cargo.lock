@@ -189,6 +189,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "crossterm 0.28.1",
+ "indoc",
  "ratatui",
  "reqwest",
  "serde",

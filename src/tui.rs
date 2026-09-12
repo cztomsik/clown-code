@@ -27,6 +27,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 
+use indoc::indoc;
+
 use crate::config::Config;
 use crate::llm::Role;
 use crate::model::Clown;
@@ -333,6 +335,27 @@ impl Tui {
                 }
             }
             "continue" => self.clown.continue_latest(),
+            "help" => {
+                self.notice = Some(
+                    indoc! {r#"
+                        /help — show this list
+                        /exit, /quit — leave
+                        /stop — stop the worker (Ctrl-C too)
+                        /clear — clear the conversation
+                        /clear-tools — remove tool results from history
+                        /compact — ask the model to summarize the history
+                        /init — explore the project and write AGENTS.md
+                        /retry — re-run the last user message
+                        /retry-turn — re-run from the last assistant reply
+                        /undo — recall the last prompt into the input
+                        /save — save the session to a file
+                        /load <file> — load a session file
+                        /continue — load the most recent session
+                        /models — list the server's models
+                        /model [name] — show or set the model"#}
+                    .into(),
+                );
+            }
             "models" => {
                 let current = self.clown.agent.model.clone();
                 self.notice = Some(match self.clown.agent.list_models() {
@@ -375,11 +398,36 @@ impl Tui {
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(FOOTER_HEIGHT)])
+            .constraints([
+                Constraint::Length(BANNER_HEIGHT),
+                Constraint::Min(1),
+                Constraint::Length(FOOTER_HEIGHT),
+            ])
             .split(area);
 
-        self.render_messages(f, chunks[0]);
-        self.render_footer(f, chunks[1]);
+        self.render_banner(f, chunks[0]);
+        self.render_messages(f, chunks[1]);
+        self.render_footer(f, chunks[2]);
+    }
+
+    /// The fixed header: the clown mark + title + hint as one dimmed
+    /// block (a signature, not a headline), with a spacer line before
+    /// the transcript.
+    fn render_banner(&self, f: &mut ratatui::Frame, area: Rect) {
+        let banner = indoc! {r#"
+            ╭─────╮
+            │ >.< │  Clown Code
+            │ ──  │  /help for commands
+        "#};
+        f.render_widget(
+            Paragraph::new(format!("{banner}\n")).style(Style::default().fg(theme::DIM)),
+            Rect::new(
+                area.x + 2,
+                area.y,
+                area.width.saturating_sub(2),
+                area.height,
+            ),
+        );
     }
 
     /// The transcript: every non-system message as pre-wrapped lines,
@@ -530,6 +578,8 @@ mod theme {
 }
 
 const FOOTER_HEIGHT: u16 = 8;
+/// The fixed header: 3 rows of banner + 1 spacer line.
+const BANNER_HEIGHT: u16 = 4;
 const INPUT_ROWS: usize = 3;
 /// Tool results are clamped to 10 lines.
 const TOOL_MAX_LINES: usize = 10;
@@ -554,9 +604,23 @@ fn build_message_lines(clown: &Clown, width: usize) -> Vec<Line<'static>> {
         }
 
         if let Some(text) = msg.content.as_ref().and_then(|c| c.text()) {
+            let mut wrapped: Vec<String> = if msg.role == Role::Tool {
+                wrap_text(text, width.saturating_sub(2).max(1))
+            } else {
+                wrap_text(text, width)
+            };
+            // Models often start text with "\n\n" and end it with "\n"
+            // — drop the empty edge lines so the inter-message
+            // separator is the only blank line.
+            while wrapped.first().is_some_and(|s| s.is_empty()) {
+                wrapped.remove(0);
+            }
+            while wrapped.last().is_some_and(|s| s.is_empty()) {
+                wrapped.pop();
+            }
+
             if msg.role == Role::Tool {
                 // Tool results: indented, dimmed, clamped with a marker.
-                let wrapped: Vec<String> = wrap_text(text, width.saturating_sub(2).max(1));
                 let total = wrapped.len();
                 for l in wrapped.into_iter().take(TOOL_MAX_LINES) {
                     lines.push(Line::from(Span::styled(
@@ -573,7 +637,7 @@ fn build_message_lines(clown: &Clown, width: usize) -> Vec<Line<'static>> {
                 }
             } else {
                 let color = role_style(msg.role);
-                for l in wrap_text(text, width) {
+                for l in wrapped {
                     lines.push(Line::from(l).style(Style::default().fg(color)));
                 }
             }
