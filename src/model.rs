@@ -23,26 +23,34 @@ use crate::{prompt, tools};
 // there is only ever one agent with fixed request parameters.
 
 /// Request parameters (all fixed).
-const MODEL: &str = "default";
+/// Fallback model when discovery finds nothing (llama.cpp's `--alias`).
+const DEFAULT_MODEL: &str = "default";
 const MAX_COMPLETION_TOKENS: u32 = 32 * 1024;
 const AUTO_RETRY: u8 = 1;
 
 #[derive(Clone)]
 pub struct Agent {
     client: Client,
+    pub model: String,
     toolbox: Toolbox,
     pub messages: Vec<Message>,
     pub total_tokens: u32,
 }
 
 impl Agent {
-    pub fn new(client: Client, toolbox: Toolbox) -> Self {
+    pub fn new(client: Client, model: impl Into<String>, toolbox: Toolbox) -> Self {
         Self {
             client,
+            model: model.into(),
             toolbox,
             messages: Vec::new(),
             total_tokens: 0,
         }
+    }
+
+    /// List the model ids offered by the server (for `/models`).
+    pub fn list_models(&self) -> Result<Vec<String>, String> {
+        self.client.list_models()
     }
 
     pub fn add_message(&mut self, msg: Message) {
@@ -83,7 +91,7 @@ impl Agent {
 
     fn create_completion(&self) -> Result<Response, String> {
         let request = Request {
-            model: MODEL.into(),
+            model: self.model.clone(),
             messages: self.messages.clone(),
             tools: Some(self.toolbox.all_tools()),
             response_format: None,
@@ -303,7 +311,7 @@ pub fn dummy_config() -> Config {
 pub fn dummy_agent() -> Agent {
     let mut toolbox = Toolbox::default();
     tools::register_all_tools(&mut toolbox);
-    Agent::new(Client::new(&dummy_config()), toolbox)
+    Agent::new(Client::new(&dummy_config()), "default", toolbox)
 }
 
 // =============================================================== clown
@@ -338,13 +346,29 @@ pub struct Clown {
 }
 
 impl Clown {
-    /// Agent with all tools enabled, system prompt = PREFIX + AGENTS.md
-    /// + date/cwd.
+    /// Agent with all tools enabled, system prompt = PREFIX +
+    /// AGENTS.md + date/cwd. The model is auto-discovered: the first
+    /// id from the server's model list, falling back to
+    /// `DEFAULT_MODEL` when the endpoint is unreachable or empty.
     pub fn new(config: &Config) -> io::Result<Self> {
         let mut toolbox = Toolbox::default();
         tools::register_all_tools(&mut toolbox);
 
-        let mut agent = Agent::new(Client::new(config), toolbox);
+        // First id from the server's model list; fall back to
+        // DEFAULT_MODEL when the endpoint is unreachable or empty.
+        let client = Client::new(config);
+        let model = match client.list_models() {
+            Ok(ids) => ids.into_iter().next().unwrap_or_else(|| {
+                tracing::warn!("server returned no models; using {DEFAULT_MODEL}");
+                DEFAULT_MODEL.to_string()
+            }),
+            Err(e) => {
+                tracing::warn!("model discovery failed ({e}); using {DEFAULT_MODEL}");
+                DEFAULT_MODEL.to_string()
+            }
+        };
+
+        let mut agent = Agent::new(client, model, toolbox);
         agent.add_message(Message::system(
             prompt::load_system_prompt().map_err(io::Error::other)?,
         ));
@@ -421,6 +445,11 @@ impl Clown {
                 let _ = self.finish_compact();
             }
         }
+    }
+
+    /// Set the model for all future runs (`/model <name>`).
+    pub fn set_model(&mut self, model: impl Into<String>) {
+        self.agent.model = model.into();
     }
 
     // ---------------------------------------------------------- messages
@@ -549,7 +578,8 @@ mod tests {
     use super::*;
 
     fn clown_with_history() -> Clown {
-        let mut c = Clown::new(&Config::default()).expect("clown init");
+        // Closed port: discovery fails fast and falls back to "default".
+        let mut c = Clown::new(&dummy_config()).expect("clown init");
         // Replace the system prompt with a marker, add history.
         c.agent.messages = vec![
             Message::system("SYS"),
@@ -635,6 +665,19 @@ mod tests {
         // Absent/empty arguments = no params, fine.
         assert!(!is_corrupt_tool_calls(Some(std::slice::from_ref(&tc("")))));
         assert!(!is_corrupt_tool_calls(None));
+    }
+
+    #[test]
+    fn set_model_changes_the_model() {
+        let mut c = clown_with_history();
+        assert_eq!(c.agent.model, "default");
+        c.set_model("llama-3");
+        assert_eq!(c.agent.model, "llama-3");
+    }
+
+    #[test]
+    fn list_models_fails_against_closed_port() {
+        assert!(dummy_agent().list_models().is_err());
     }
 
     /// Full-loop test against a closed port: send → worker starts →

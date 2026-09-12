@@ -219,6 +219,17 @@ impl Response {
     }
 }
 
+// Response of `GET /v1/models` (only the fields we read).
+#[derive(Debug, Deserialize)]
+pub struct ModelInfo {
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ModelList {
+    pub data: Vec<ModelInfo>,
+}
+
 /// Request body only (never deserialized).
 #[derive(Debug, Clone, Serialize)]
 pub struct Request {
@@ -280,7 +291,7 @@ impl Client {
     pub fn create_chat_completion(&self, params: &Request) -> Result<Response, String> {
         let req = self
             .http
-            .post(format!("{}/chat/completions", self.base_url));
+            .post(format!("{}/v1/chat/completions", self.base_url));
 
         let res = req.json(params).send().map_err(|e| error_name(&e))?;
 
@@ -291,6 +302,27 @@ impl Client {
         }
 
         res.json::<Response>().map_err(|e| error_name(&e))
+    }
+
+    /// List the model ids offered by the server (`GET /v1/models`).
+    /// Short timeout — this is a discovery call, not a completion.
+    pub fn list_models(&self) -> Result<Vec<String>, String> {
+        const TIMEOUT: Duration = Duration::from_secs(10);
+
+        let res = self
+            .http
+            .get(format!("{}/v1/models", self.base_url))
+            .timeout(TIMEOUT)
+            .send()
+            .map_err(|e| error_name(&e))?;
+
+        let status = res.status();
+        if !status.is_success() {
+            return Err(format!("HttpError: server returned {status}"));
+        }
+
+        let list: ModelList = res.json().map_err(|e| error_name(&e))?;
+        Ok(list.data.into_iter().map(|m| m.id).collect())
     }
 }
 

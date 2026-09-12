@@ -178,6 +178,9 @@ pub struct Tui {
     /// Lines scrolled back from the bottom of the transcript
     /// (0 = pinned to the newest line).
     scroll: u16,
+    /// A transient info line set by commands (`/models`, `/model`),
+    /// shown at the end of the transcript until the next submission.
+    notice: Option<String>,
     last_esc: Option<Instant>,
     last_ctrl_c: Option<Instant>,
 }
@@ -188,6 +191,7 @@ pub fn run(config: &Config) -> io::Result<()> {
         clown,
         input: Input::default(),
         scroll: 0,
+        notice: None,
         last_esc: None,
         last_ctrl_c: None,
     };
@@ -275,6 +279,9 @@ impl Tui {
                     return false;
                 }
 
+                // A new submission dismisses any command notice.
+                self.notice = None;
+
                 // Handle special commands. The argument is the entire
                 // rest of the line (so filenames with spaces work).
                 if let Some(rest) = input.strip_prefix('/') {
@@ -326,6 +333,25 @@ impl Tui {
                 }
             }
             "continue" => self.clown.continue_latest(),
+            "models" => {
+                let current = self.clown.agent.model.clone();
+                self.notice = Some(match self.clown.agent.list_models() {
+                    Ok(ids) => ids
+                        .iter()
+                        .map(|id| format!("{} {id}", if *id == current { "*" } else { " " }))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    Err(e) => format!("Model list failed: {e}"),
+                });
+            }
+            "model" => {
+                if arg.is_empty() {
+                    self.notice = Some(format!("Model: {}", self.clown.agent.model));
+                } else {
+                    self.clown.set_model(arg);
+                    self.notice = Some(format!("Model set to: {arg}"));
+                }
+            }
             _ => {}
         }
         true
@@ -360,7 +386,14 @@ impl Tui {
     /// with the scrollback applied via `Paragraph::scroll`.
     fn render_messages(&self, f: &mut ratatui::Frame, area: Rect) {
         let width = area.width.saturating_sub(4).max(1); // 2-col margin each side
-        let lines = build_message_lines(&self.clown, width as usize);
+        let mut lines = build_message_lines(&self.clown, width as usize);
+
+        // A command notice (model list, model set) at the end, dimmed.
+        if let Some(notice) = &self.notice {
+            for l in wrap_text(notice, width as usize) {
+                lines.push(Line::from(l).style(Style::default().fg(theme::SECONDARY)));
+            }
+        }
 
         // `scroll` is measured from the bottom; convert to a top offset.
         // (usize throughout: `saturating_sub` on a signed type only
@@ -404,31 +437,33 @@ impl Tui {
             [chunks[1], chunks[3]]
         };
 
-        // Status row: "User:" left, "Tokens: N" right.
+        // Status row: "User:" left, then right-aligned "<model>  Tokens: N"
+        // (a model id longer than the row clips from the left, so "User:"
+        // always wins).
         let status_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(5),
-                Constraint::Min(1),
-                Constraint::Min(1),
-            ])
+            .constraints([Constraint::Length(5), Constraint::Min(1)])
             .split(status);
         f.render_widget(
             Paragraph::new(Line::from("User:").style(Style::default().fg(theme::TEXT))),
             status_chunks[0],
         );
-        let token_spans = vec![
+        let right = Line::from(vec![
+            Span::styled(
+                self.clown.agent.model.clone(),
+                Style::default()
+                    .fg(theme::SECONDARY)
+                    .add_modifier(Modifier::ITALIC),
+            ),
+            Span::raw("  "),
             Span::styled("Tokens:", Style::default().fg(theme::SECONDARY)),
             Span::raw(" "),
             Span::styled(
                 self.clown.agent.total_tokens.to_string(),
                 Style::default().fg(theme::SECONDARY),
             ),
-        ];
-        f.render_widget(
-            Paragraph::new(Line::from(token_spans).right_aligned()),
-            status_chunks[2],
-        );
+        ]);
+        f.render_widget(Paragraph::new(right).right_aligned(), status_chunks[1]);
 
         // Input box: the buffer on base1, with a filled cursor span.
         f.render_widget(
