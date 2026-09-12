@@ -526,6 +526,7 @@ mod theme {
     pub const PRIMARY: Color = Color::Indexed(110); // 0x88C0D0
     pub const SECONDARY: Color = Color::Indexed(109); // 0x81A1C1
     pub const ACCENT: Color = Color::Indexed(144); // 0xA3BE8C
+    pub const DIM: Color = Color::Indexed(66); // 0x4C566A
 }
 
 const FOOTER_HEIGHT: u16 = 8;
@@ -548,27 +549,59 @@ fn build_message_lines(clown: &Clown, width: usize) -> Vec<Line<'static>> {
         if msg.role == Role::System {
             continue;
         }
-        let color = role_style(msg.role);
-        let max_lines = if msg.role == Role::Tool {
-            TOOL_MAX_LINES
-        } else {
-            usize::MAX
-        };
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
 
         if let Some(text) = msg.content.as_ref().and_then(|c| c.text()) {
-            let wrapped: Vec<String> = wrap_text(text, width);
-            for l in wrapped.into_iter().take(max_lines) {
-                lines.push(Line::from(l).style(Style::default().fg(color)));
+            if msg.role == Role::Tool {
+                // Tool results: indented, dimmed, clamped with a marker.
+                let wrapped: Vec<String> = wrap_text(text, width.saturating_sub(2).max(1));
+                let total = wrapped.len();
+                for l in wrapped.into_iter().take(TOOL_MAX_LINES) {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {l}"),
+                        Style::default().fg(theme::DIM),
+                    )));
+                }
+                if total > TOOL_MAX_LINES {
+                    let more = total - TOOL_MAX_LINES;
+                    lines.push(Line::from(Span::styled(
+                        format!("  … ({more} more lines)"),
+                        Style::default().fg(theme::DIM),
+                    )));
+                }
+            } else {
+                let color = role_style(msg.role);
+                for l in wrap_text(text, width) {
+                    lines.push(Line::from(l).style(Style::default().fg(color)));
+                }
             }
         }
 
-        // Tool calls rendered as "name<20>arguments".
+        // Tool calls: "→ name" (accent) + a short summary of the
+        // arguments (the command / path / skill, not the raw JSON),
+        // wrapped with a 2-space continuation indent.
         if let Some(tcs) = &msg.tool_calls {
             for tc in tcs {
-                lines.push(Line::from(Span::styled(
-                    format!("{:<20}{}", tc.function.name, tc.function.arguments),
-                    Style::default().fg(theme::SECONDARY),
-                )));
+                let head = format!("→ {}", tc.function.name);
+                let head_w = head.chars().count();
+                let summary = tool_call_summary(&tc.function.name, &tc.function.arguments);
+                // width - head_w - 1 (the separating space) so the
+                // first line never overflows the row.
+                let mut it =
+                    wrap_text(&summary, width.saturating_sub(head_w + 1).max(1)).into_iter();
+                let first = it.next().unwrap_or_default();
+                lines.push(Line::from(vec![
+                    Span::styled(head, Style::default().fg(theme::ACCENT)),
+                    Span::styled(format!(" {first}"), Style::default().fg(theme::SECONDARY)),
+                ]));
+                for rest in it {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {rest}"),
+                        Style::default().fg(theme::SECONDARY),
+                    )));
+                }
             }
         }
     }
@@ -577,7 +610,9 @@ fn build_message_lines(clown: &Clown, width: usize) -> Vec<Line<'static>> {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             format!("Processing... {}s", clown.elapsed()),
-            Style::default().fg(theme::TEXT),
+            Style::default()
+                .fg(theme::SECONDARY)
+                .add_modifier(Modifier::ITALIC),
         )));
     }
 
@@ -590,6 +625,25 @@ fn build_message_lines(clown: &Clown, width: usize) -> Vec<Line<'static>> {
     }
 
     lines
+}
+
+/// A short, human-readable summary of a tool call's arguments — the
+/// shell command, file path, or skill name instead of the raw JSON.
+/// Falls back to the raw arguments when parsing fails.
+fn tool_call_summary(name: &str, arguments: &str) -> String {
+    let arg = |key: &str| {
+        serde_json::from_str::<serde_json::Value>(arguments)
+            .ok()
+            .and_then(|v| v.get(key).and_then(|s| s.as_str()).map(str::to_string))
+    };
+    match name {
+        "run_command" => arg("command").unwrap_or_else(|| arguments.to_string()),
+        "read_file" | "write_file" | "edit_file" => {
+            arg("path").unwrap_or_else(|| arguments.to_string())
+        }
+        "load_skill" => arg("skill_name").unwrap_or_else(|| arguments.to_string()),
+        _ => arguments.to_string(),
+    }
 }
 
 /// Split `s` after `col` characters into `(left, right)`, char-boundary safe.
@@ -650,7 +704,28 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::wrap_text;
+    use super::{tool_call_summary, wrap_text};
+
+    #[test]
+    fn tool_call_summary_extracts_the_relevant_field() {
+        assert_eq!(
+            tool_call_summary("run_command", r#"{"command": "ls -la", "cwd": "x"}"#),
+            "ls -la"
+        );
+        assert_eq!(
+            tool_call_summary("read_file", r#"{"path": "src/main.rs"}"#),
+            "src/main.rs"
+        );
+        assert_eq!(
+            tool_call_summary("load_skill", r#"{"skill_name": "init"}"#),
+            "init"
+        );
+        // Unparseable arguments fall back to the raw string.
+        assert_eq!(
+            tool_call_summary("run_command", r#"{"command": "#),
+            r#"{"command": "#
+        );
+    }
 
     #[test]
     fn wraps_words() {
