@@ -4,6 +4,7 @@
 //! saved session files), so they must not change.
 
 use std::io::Read;
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -286,6 +287,17 @@ struct LoadSkillArgs {
     skill_name: String,
 }
 
+/// Validate a skill name: a single, non-empty path component — no `.`,
+/// `..`, or any path separator (and therefore no absolute paths).
+fn skill_path(skill_name: &str) -> Result<PathBuf, String> {
+    let p = Path::new(skill_name);
+    let components = p.components().collect::<Vec<_>>();
+    if components.len() != 1 || !matches!(components[0], Component::Normal(_)) {
+        return Err("InvalidSkillName".into());
+    }
+    Ok(Path::new("skills").join(format!("{skill_name}.md")))
+}
+
 /// Load a skill file and inject its contents as system instructions into the agent's context.
 /// Builtin skills (init) take precedence over user-provided skills.
 fn load_skill(args: &Value) -> Result<String, String> {
@@ -295,9 +307,7 @@ fn load_skill(args: &Value) -> Result<String, String> {
         return Ok(BUILTIN_INIT.to_string());
     }
 
-    // TODO: Check for path traversal.
-    let file = std::fs::File::open(format!("skills/{name}.md", name = args.skill_name))
-        .map_err(|e| io_err(&e))?;
+    let file = std::fs::File::open(skill_path(&args.skill_name)?).map_err(|e| io_err(&e))?;
     let mut content = Vec::new();
     file.take(MAX_READ_SIZE as u64)
         .read_to_end(&mut content)
