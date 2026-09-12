@@ -444,17 +444,22 @@ impl Tui {
             }
         }
 
-        // `scroll` is measured from the bottom; convert to a top offset.
+        // Leave a 1-row gap above the footer so the transcript never
+        // touches it (the base1 frame fill shows through that row).
+        let height = area.height.saturating_sub(1);
+
+        // `scroll` is measured from the bottom; convert to a top offset
+        // against the visible window (the gap row is not part of it).
         // (usize throughout: `saturating_sub` on a signed type only
         // saturates at the type's min, so it would not clamp to 0 here.)
-        let max_offset = lines.len().saturating_sub(area.height as usize);
+        let max_offset = lines.len().saturating_sub(height as usize);
         let offset = max_offset.saturating_sub(self.scroll as usize);
         let offset = offset.min(u16::MAX as usize) as u16;
 
         let para = Paragraph::new(lines)
             .scroll((offset, 0))
             .block(Block::default().style(Style::default().bg(theme::BASE1)));
-        f.render_widget(para, Rect::new(area.x + 2, area.y, width, area.height));
+        f.render_widget(para, Rect::new(area.x + 2, area.y, width, height));
     }
 
     fn render_footer(&self, f: &mut ratatui::Frame, area: Rect) {
