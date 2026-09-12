@@ -1,6 +1,6 @@
-.zig-cache/
-zig-out/
-zig-pkg/
+target/
 .DS_Store
 NOTES
 session-*.json
+debug.log
+error.log
