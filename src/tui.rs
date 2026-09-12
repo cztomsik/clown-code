@@ -292,10 +292,11 @@ impl Tui {
                     return false;
                 }
 
-                // Handle special commands.
+                // Handle special commands. The argument is the entire
+                // rest of the line (so filenames with spaces work).
                 if let Some(rest) = input.strip_prefix('/') {
                     let (cmd, arg) = match rest.split_once(' ') {
-                        Some((c, a)) => (c, a),
+                        Some((c, a)) => (c, a.trim_start()),
                         None => (rest, ""),
                     };
                     if !self.handle_command(cmd, arg) {
@@ -324,10 +325,9 @@ impl Tui {
             "init" => self.clown.send("Could you /init this project?"),
             "retry" => self.clown.retry(),
             "undo" => {
-                let mut buf = [0u8; 4096];
-                let len = self.clown.undo(&mut buf);
-                self.input
-                    .set(std::str::from_utf8(&buf[..len]).unwrap_or(""));
+                if let Some(text) = self.clown.undo() {
+                    self.input.set(&text);
+                }
             }
             "save" => {
                 if let Err(e) = self.clown.save() {

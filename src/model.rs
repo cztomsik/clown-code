@@ -27,25 +27,6 @@ const MODEL: &str = "default";
 const MAX_COMPLETION_TOKENS: u32 = 32 * 1024;
 const AUTO_RETRY: u8 = 1;
 
-/// Short error names surfaced in the TUI and to the model
-/// ("NoChoice", "RetryFailed", HTTP error names, ...).
-#[derive(Debug)]
-pub enum AgentError {
-    NoChoice,
-    RetryFailed,
-    Client(String),
-}
-
-impl std::fmt::Display for AgentError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NoChoice => write!(f, "NoChoice"),
-            Self::RetryFailed => write!(f, "RetryFailed"),
-            Self::Client(e) => write!(f, "{e}"),
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct Agent {
     client: Client,
@@ -71,7 +52,7 @@ impl Agent {
     /// Make one LLM call. Returns the assistant message's tool calls (if
     /// any). Retries on empty choices; appends the assistant message to
     /// the conversation.
-    pub fn step(&mut self) -> Result<Option<Vec<ToolCall>>, AgentError> {
+    pub fn step(&mut self) -> Result<Option<Vec<ToolCall>>, String> {
         let mut retries = AUTO_RETRY + 1;
         while retries > 0 {
             retries -= 1;
@@ -80,7 +61,7 @@ impl Agent {
             self.total_tokens = res.total_tokens();
 
             let Some(choice) = res.single_choice() else {
-                return Err(AgentError::NoChoice);
+                return Err("NoChoice".into());
             };
             let is_empty = choice.text().is_none_or(str::is_empty);
 
@@ -92,10 +73,10 @@ impl Agent {
             self.add_message(choice.message.clone());
             return Ok(choice.message.tool_calls.clone());
         }
-        Err(AgentError::RetryFailed)
+        Err("RetryFailed".into())
     }
 
-    fn create_completion(&self) -> Result<Response, AgentError> {
+    fn create_completion(&self) -> Result<Response, String> {
         let request = Request {
             model: MODEL.into(),
             messages: self.messages.clone(),
@@ -107,9 +88,7 @@ impl Agent {
             top_p: None,
         };
 
-        self.client
-            .create_chat_completion(&request)
-            .map_err(AgentError::Client)
+        self.client.create_chat_completion(&request)
     }
 
     /// Execute all tool calls and append tool result messages.
@@ -123,16 +102,20 @@ impl Agent {
         }
     }
 
-    /// Remove the trailing assistant/tool messages and, if a user message
-    /// now trails, remove and return it (to allow re-prompting).
-    /// Mirrors `Agent.undo()`.
-    pub fn undo(&mut self) -> Option<Message> {
+    /// Remove trailing assistant/tool messages.
+    pub fn pop_trailing_assistant_and_tools(&mut self) {
         while let Some(msg) = self.messages.last() {
             if msg.role != Role::Assistant && msg.role != Role::Tool {
                 break;
             }
             self.messages.pop();
         }
+    }
+
+    /// Remove the trailing assistant/tool messages and, if a user message
+    /// now trails, remove and return it (to allow re-prompting).
+    pub fn undo(&mut self) -> Option<Message> {
+        self.pop_trailing_assistant_and_tools();
 
         if let Some(msg) = self.messages.last() {
             if msg.role == Role::User {
@@ -240,7 +223,7 @@ fn worker_inner(mut agent: Agent, tx: &Sender<WorkerMsg>) {
         let tcs = match agent.step() {
             Ok(tcs) => tcs,
             Err(e) => {
-                let _ = tx.send(WorkerMsg::Err(e.to_string()));
+                let _ = tx.send(WorkerMsg::Err(e));
                 return;
             }
         };
@@ -295,13 +278,20 @@ Include:
 - Anything that is absolutely neccessary in order to continue the work
 Keep it under 2000 characters. After providing the summary, stop.";
 
+/// A running worker: the thread handle, its start time, and the
+/// receiver. Dropping the receiver is the kill switch — the worker's
+/// next send fails and the loop exits.
+struct Worker {
+    handle: JoinHandle<()>,
+    started_at: Instant,
+    receiver: Receiver<WorkerMsg>,
+}
+
 pub struct Clown {
     /// Parent-side conversation state — worker messages are appended to
     /// it as they arrive.
     pub agent: Agent,
-    worker: Option<JoinHandle<()>>,
-    started_at: Option<Instant>,
-    receiver: Option<Receiver<WorkerMsg>>,
+    worker: Option<Worker>,
     compacting: bool,
     /// Last worker error, surfaced in the TUI.
     pub err: Option<String>,
@@ -322,8 +312,6 @@ impl Clown {
         Ok(Self {
             agent,
             worker: None,
-            started_at: None,
-            receiver: None,
             compacting: false,
             err: None,
         })
@@ -336,18 +324,17 @@ impl Clown {
     fn start(&mut self) {
         self.stop();
         self.err = None;
-        let (worker, receiver) = spawn_worker(self.agent.clone());
-        self.worker = Some(worker);
-        self.started_at = Some(Instant::now());
-        self.receiver = Some(receiver);
+        let (handle, receiver) = spawn_worker(self.agent.clone());
+        self.worker = Some(Worker {
+            handle,
+            started_at: Instant::now(),
+            receiver,
+        });
     }
 
-    /// Dropping the receiver is the kill switch: the worker's next send
-    /// fails and the loop exits.
+    /// Kill any running worker.
     pub fn stop(&mut self) {
         self.worker = None;
-        self.started_at = None;
-        self.receiver = None;
     }
 
     pub fn busy(&self) -> bool {
@@ -356,7 +343,10 @@ impl Clown {
 
     /// Seconds since the current worker started (0 when idle).
     pub fn elapsed(&self) -> u64 {
-        self.started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0)
+        self.worker
+            .as_ref()
+            .map(|w| w.started_at.elapsed().as_secs())
+            .unwrap_or(0)
     }
 
     /// Call from the TUI on idle.
@@ -368,11 +358,11 @@ impl Clown {
         // Drain all pending worker messages (into a local vec so we can
         // mutate self while the receiver is still borrowed).
         let pending: Vec<WorkerMsg> = self
-            .receiver
+            .worker
             .as_ref()
-            .map(|rx| {
+            .map(|w| {
                 let mut v = Vec::new();
-                while let Ok(m) = rx.try_recv() {
+                while let Ok(m) = w.receiver.try_recv() {
                     v.push(m);
                 }
                 v
@@ -389,7 +379,7 @@ impl Clown {
 
         // Worker finished.
         let mut finished = false;
-        if self.worker.as_ref().is_some_and(|w| w.is_finished()) {
+        if self.worker.as_ref().is_some_and(|w| w.handle.is_finished()) {
             self.stop();
             finished = true;
 
@@ -455,37 +445,26 @@ impl Clown {
     /// Drop the assistant's response (and tool results) and re-run with
     /// the same user message.
     pub fn retry(&mut self) {
-        self.pop_trailing_assistant_and_tools();
+        self.agent.pop_trailing_assistant_and_tools();
         self.start();
     }
 
     /// Remove trailing assistant/tool messages and the preceding user
-    /// message, copying it back into the input buffer (if it fits), to
-    /// allow re-prompting.
-    /// Returns the new input length (0 when there was nothing to undo).
-    pub fn undo(&mut self, buf: &mut [u8]) -> usize {
-        let Some(msg) = self.agent.undo() else {
-            return 0;
-        };
-        if let (true, Some(text)) = (
-            msg.role == Role::User,
-            msg.content.as_ref().and_then(|c| c.text()),
-        ) {
-            if text.len() < buf.len() {
-                buf[..text.len()].copy_from_slice(text.as_bytes());
-                return text.len();
-            }
+    /// message, returning its text (if any) so the TUI can copy it back
+    /// into the input buffer for re-prompting.
+    /// Returns None when there was nothing to undo.
+    pub fn undo(&mut self) -> Option<String> {
+        let msg = self.agent.undo()?;
+        if msg.role == Role::User {
+            return Some(
+                msg.content
+                    .as_ref()
+                    .and_then(|c| c.text())
+                    .unwrap_or_default()
+                    .to_string(),
+            );
         }
-        0
-    }
-
-    fn pop_trailing_assistant_and_tools(&mut self) {
-        while let Some(msg) = self.agent.messages.last() {
-            if msg.role != Role::Assistant && msg.role != Role::Tool {
-                break;
-            }
-            self.agent.messages.pop();
-        }
+        None
     }
 
     // ----------------------------------------------------------- sessions
@@ -555,20 +534,20 @@ mod tests {
     }
 
     #[test]
-    fn undo_returns_last_user_message_to_buffer() {
+    fn undo_returns_last_user_message_text() {
         let mut c = clown_with_history();
-        let mut buf = [0u8; 4096];
-        let len = c.undo(&mut buf);
-        assert_eq!(std::str::from_utf8(&buf[..len]).unwrap(), "do the thing");
+        assert_eq!(c.undo().as_deref(), Some("do the thing"));
         // history now ends at the system message
         assert_eq!(c.agent.messages.len(), 1);
+        // nothing left to undo
+        assert_eq!(c.undo(), None);
     }
 
     #[test]
     fn retry_drops_trailing_assistant_and_tools() {
         let mut c = clown_with_history();
         // Don't actually start a worker in the unit test — just check the pop logic.
-        c.pop_trailing_assistant_and_tools();
+        c.agent.pop_trailing_assistant_and_tools();
         assert_eq!(c.agent.messages.len(), 2);
         assert_eq!(c.agent.messages[1].role, Role::User);
     }
