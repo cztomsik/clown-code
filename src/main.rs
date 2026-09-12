@@ -1,8 +1,8 @@
 //! Entry point.
 //!
-//! TUI is not implemented yet (Phase 3); this binary currently wires up
-//! config, logging, and the panic handler, and exposes `--print-prompt`
-//! as a smoke test for the system prompt assembly.
+//! Sets up logging and the panic handler, loads `Config`, supports
+//! `--print-prompt` (prints the assembled system prompt and exits),
+//! and otherwise runs the TUI.
 
 use std::io::Write;
 
@@ -55,7 +55,7 @@ fn main() -> std::io::Result<()> {
     init_logging();
 
     let config = Config::from_env();
-    println!("clown-code-rs: base_url = {}", config.base_url);
+    tracing::debug!("base_url = {}", config.base_url);
 
     if std::env::args().any(|a| a == "--print-prompt") {
         match clown_code::prompt::load_system_prompt() {

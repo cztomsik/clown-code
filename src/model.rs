@@ -117,17 +117,8 @@ impl Agent {
     /// Execute all tool calls and append tool result messages.
     pub fn accept_all(&mut self, runtime: &AgentRuntime, tcs: &[ToolCall]) {
         for tc in tcs {
-            self.accept(runtime, tc);
+            self.add_message(Message::tool(runtime.exec_tool(tc), tc.id.clone()));
         }
-    }
-
-    pub fn accept(&mut self, runtime: &AgentRuntime, tc: &ToolCall) {
-        let content = runtime.exec_tool(tc);
-        self.respond(tc, content);
-    }
-
-    pub fn respond(&mut self, tc: &ToolCall, content: String) {
-        self.add_message(Message::tool(content, tc.id.clone()));
     }
 
     /// Remove the trailing assistant/tool messages and, if a user message
@@ -341,6 +332,7 @@ fn worker_inner(mut agent: Agent, runtime: AgentRuntime, tx: &Sender<WorkerMsg>)
 }
 
 /// An agent + runtime pointed at a closed localhost port, for tests.
+#[cfg(test)]
 pub fn dummy_agent_runtime() -> (Agent, AgentRuntime) {
     let config = Config {
         base_url: "http://127.0.0.1:9".into(),
@@ -552,8 +544,7 @@ impl Clown {
     /// back into the input buffer (if it fits), to allow re-prompting.
     /// Returns the new input length (0 when there was nothing to undo).
     pub fn undo(&mut self, buf: &mut [u8]) -> usize {
-        self.pop_trailing_assistant_and_tools();
-        let Some(msg) = self.agent.messages.pop() else {
+        let Some(msg) = self.agent.undo() else {
             return 0;
         };
         if let (true, Some(text)) = (

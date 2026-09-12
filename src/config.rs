@@ -7,8 +7,6 @@ pub struct Config {
     pub base_url: String,
     /// Request timeout (15 minutes, as in the Zig original).
     pub timeout_secs: u64,
-    /// Optional API key (sent as `Authorization: Bearer <key>`).
-    pub api_key: Option<String>,
 }
 
 impl Default for Config {
@@ -22,7 +20,6 @@ impl Config {
         Self {
             base_url: "http://127.0.0.1:8080".into(),
             timeout_secs: 15 * 60,
-            api_key: None,
         }
     }
 
@@ -45,6 +42,5 @@ mod tests {
         let c = Config::default_local();
         assert_eq!(c.base_url, "http://127.0.0.1:8080");
         assert_eq!(c.timeout_secs, 900);
-        assert!(c.api_key.is_none());
     }
 }

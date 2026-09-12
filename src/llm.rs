@@ -38,24 +38,13 @@ impl Content {
     }
 }
 
+// NOTE: tokamak's wire format also supports image content parts
+// (`type: "image_url"`); we intentionally don't model it — nothing in
+// clown-code can produce image content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContentType {
     Text,
-    ImageUrl,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ImageDetail {
-    Low,
-    High,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ImageUrl {
-    pub url: String,
-    pub detail: ImageDetail,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -64,18 +53,6 @@ pub struct ContentPart {
     pub part_type: ContentType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub image_url: Option<ImageUrl>,
-}
-
-impl ContentPart {
-    pub fn text(text: impl Into<String>) -> Self {
-        Self {
-            part_type: ContentType::Text,
-            text: Some(text.into()),
-            image_url: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,17 +62,6 @@ pub enum Role {
     User,
     Assistant,
     Tool,
-}
-
-impl Role {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::System => "system",
-            Self::User => "user",
-            Self::Assistant => "assistant",
-            Self::Tool => "tool",
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -177,20 +143,6 @@ fn default_tool_type() -> ToolType {
     ToolType::Function
 }
 
-impl Tool {
-    pub fn new(name: impl Into<String>, description: impl Into<String>, parameters: Value) -> Self {
-        Self {
-            tool_type: ToolType::Function,
-            function: FunctionSpec {
-                name: name.into(),
-                description: Some(description.into()),
-                parameters,
-                strict: true,
-            },
-        }
-    }
-}
-
 /// A tool call requested by the model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
@@ -265,7 +217,8 @@ impl Response {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request body only (never deserialized).
+#[derive(Debug, Clone, Serialize)]
 pub struct Request {
     pub model: String,
     pub messages: Vec<Message>,
@@ -275,31 +228,11 @@ pub struct Request {
     pub response_format: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
-    #[serde(default = "default_max_tokens")]
     pub max_completion_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
-}
-
-fn default_max_tokens() -> u32 {
-    4096
-}
-
-impl Request {
-    pub fn new(model: impl Into<String>, messages: Vec<Message>) -> Self {
-        Self {
-            model: model.into(),
-            messages,
-            tools: None,
-            response_format: None,
-            reasoning_effort: None,
-            max_completion_tokens: 4096,
-            temperature: None,
-            top_p: None,
-        }
-    }
 }
 
 // ============================================================== client
@@ -327,7 +260,6 @@ pub fn error_name(e: &reqwest::Error) -> String {
 pub struct Client {
     http: HttpClient,
     base_url: String,
-    api_key: Option<String>,
 }
 
 impl Client {
@@ -341,21 +273,13 @@ impl Client {
         // appended below (same as tokamak's `http.Client.request`).
         let base_url = config.base_url.trim_end_matches('/').to_string();
 
-        Self {
-            http,
-            base_url,
-            api_key: config.api_key.clone(),
-        }
+        Self { http, base_url }
     }
 
     pub fn create_chat_completion(&self, params: &Request) -> Result<Response, String> {
-        let mut req = self
+        let req = self
             .http
             .post(format!("{}/chat/completions", self.base_url));
-
-        if let Some(key) = &self.api_key {
-            req = req.bearer_auth(key);
-        }
 
         let res = req.json(params).send().map_err(|e| error_name(&e))?;
 

@@ -36,13 +36,6 @@ min-p = 0.00
 chat-template-kwargs  = {"preserve_thinking": false}
 reasoning-budget = 1000
 reasoning-budget-message = ... Considering the limited time by the user, I have to give the solution based on the thinking directly now. </think>
-
-[advisor]
-hf = unsloth/Qwen3.6-27B-GGUF:UD-Q4_K_XL
-temp = 0.4
-top-p = 0.95
-top-k = 20
-min-p = 0.00
 ```
 
 Then build & run the app:
@@ -58,8 +51,7 @@ The base URL defaults to `http://127.0.0.1:8080`; override it with
 ## Test
 
 ```bash
-cargo test                 # unit + integration (mock-server E2E)
-cargo test -- --ignored    # also loads the real session files from this repo
+cargo test
 ```
 
 ## Getting started
