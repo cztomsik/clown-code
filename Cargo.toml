@@ -11,7 +11,7 @@ path = "src/main.rs"
 [dependencies]
 chrono = "0.4"
 crossterm = "0.28"
-ratatui = "0.29"
+ratatui = "0.30"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 # preserve_order keeps JSON object keys in insertion order (declaration

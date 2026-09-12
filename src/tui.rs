@@ -1,8 +1,18 @@
 //! The TUI — event loop, multi-line input buffer, and rendering.
+//!
+//! The transcript is a single `Paragraph` with `Paragraph::scroll` for
+//! scrollback, the footer is built with `Layout`, and the event loop is
+//! the standard ratatui draw-then-poll pattern driven by a fixed tick rate.
+//!
+//! (ratatui 0.30 still ships no text-input widget and no stable wrapped
+//! line-count API, so lines are pre-wrapped to the content width by
+//! [`wrap_text`] — that keeps per-message line caps and the scroll offset
+//! exact.)
 
 use std::io;
 use std::time::{Duration, Instant};
 
+use crossterm::cursor::Show;
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
     MouseEventKind,
@@ -15,8 +25,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph, Wrap};
-use ratatui::Frame;
+use ratatui::widgets::{Block, Paragraph};
 
 use crate::config::Config;
 use crate::llm::Role;
@@ -158,25 +167,36 @@ impl Input {
 
 // =============================================================== tui
 
-/// How long to wait for an event before ticking/redrawing.
-const POLL_TIMEOUT: Duration = Duration::from_millis(10);
+/// Redraw at most this often — also bounds how fast the
+/// "Processing… Ns" counter updates while a worker is busy.
+const TICK_RATE: Duration = Duration::from_millis(250);
 /// Double Ctrl-C within this window exits; a single one stops the worker.
 const CTRL_C_WINDOW: Duration = Duration::from_millis(500);
 /// Double Esc within this window clears the input buffer.
 const ESC_WINDOW: Duration = Duration::from_secs(2);
 
+/// Restores the terminal (mouse capture, alt screen, raw mode, cursor)
+/// when the event loop ends — including when a panic unwinds through it.
+struct TermGuard;
+
+impl Drop for TermGuard {
+    fn drop(&mut self) {
+        // Ignore errors — the terminal is already mid-shutdown if we
+        // got here via a panic.
+        let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), Show);
+    }
+}
+
 pub struct Tui {
     pub clown: Clown,
     input: Input,
-    /// 0 = auto-scroll to bottom; > 0 = lines from the bottom.
-    scroll: i32,
+    /// Lines scrolled back from the bottom of the transcript
+    /// (0 = pinned to the newest line).
+    scroll: u16,
     last_esc: Option<Instant>,
     last_ctrl_c: Option<Instant>,
-    /// Value of `clown.elapsed()` at the last draw (the "Processing… Ns"
-    /// counter changes once a second while busy).
-    last_elapsed: u64,
-    /// Whether at least one frame has been drawn.
-    drawn: bool,
 }
 
 pub fn run(config: &Config) -> io::Result<()> {
@@ -187,83 +207,59 @@ pub fn run(config: &Config) -> io::Result<()> {
         scroll: 0,
         last_esc: None,
         last_ctrl_c: None,
-        last_elapsed: 0,
-        drawn: false,
     };
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    // Enable mouse report modes ?1000h ?1002h ?1003h ?1006h (buttons,
-    // drag, all motion, SGR) so wheel events arrive as <64;...M /
-    // <65;...M. crossterm's EnableMouseCapture enables exactly those
-    // (plus 1015).
-    execute!(stdout, EnableMouseCapture)?;
+    // EnterAlternateScreen + mouse report modes ?1000h ?1002h ?1003h
+    // ?1006h (buttons, drag, all motion, SGR) so wheel events arrive.
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
-    let result = tui.run(&mut terminal);
-
-    // Teardown; ignore errors — the terminal is already
-    // mid-shutdown if we got here via a panic.
-    // (stdout was moved into the backend, so write via it.)
-    let _ = execute!(
-        terminal.backend_mut(),
-        DisableMouseCapture,
-        LeaveAlternateScreen
-    );
-    let _ = disable_raw_mode();
-    terminal.show_cursor().ok();
-
-    result
+    tui.run(&mut terminal)
 }
 
 impl Tui {
+    /// Draw-then-poll event loop. `event::poll` blocks until the next
+    /// tick, so an idle screen redraws at most ~4 times per second.
     fn run(
         &mut self,
         terminal: &mut ratatui::Terminal<CrosstermBackend<io::Stdout>>,
     ) -> io::Result<()> {
-        loop {
-            let ticked = self.clown.tick();
+        let _guard = TermGuard;
+        let mut next_tick = Instant::now() + TICK_RATE;
 
-            let mut got_event = false;
-            if event::poll(POLL_TIMEOUT)? {
+        loop {
+            terminal.draw(|f| self.render(f))?;
+
+            let timeout = next_tick.saturating_duration_since(Instant::now());
+            if event::poll(timeout)? {
                 match event::read()? {
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         if self.handle_key(key) {
-                            break;
+                            return Ok(());
                         }
                     }
                     Event::Mouse(m) => match m.kind {
-                        MouseEventKind::ScrollUp => self.scroll += 1,
+                        MouseEventKind::ScrollUp => self.scroll = self.scroll.saturating_add(1),
                         MouseEventKind::ScrollDown => self.scroll = self.scroll.saturating_sub(1),
                         _ => {}
                     },
                     // Bracketed paste goes straight into the input box.
-                    Event::Paste(text) => {
-                        self.input.paste(&text);
-                    }
+                    Event::Paste(text) => self.input.paste(&text),
                     _ => {}
                 }
-                got_event = true;
             }
 
-            // Only redraw when something observable changed rather than
-            // every poll. The "Processing… Ns" counter ticks once a
-            // second while a worker is busy, so redraw on each new
-            // second too.
-            let elapsed = self.clown.elapsed();
-            let changed = ticked
-                || got_event
-                || !self.drawn
-                || (self.clown.busy() && elapsed != self.last_elapsed);
-            if changed {
-                self.drawn = true;
-                self.last_elapsed = elapsed;
-                terminal.draw(|f| draw(f, &self.clown, &self.input, self.scroll))?;
+            // Drain new worker messages into the conversation.
+            let _ = self.clown.tick();
+
+            // Advance the tick schedule (fast-forward after a stall).
+            while Instant::now() >= next_tick {
+                next_tick += TICK_RATE;
             }
         }
-        Ok(())
     }
 
     /// Returns true when the app should exit.
@@ -352,6 +348,144 @@ impl Tui {
         }
         true
     }
+
+    // ------------------------------------------------------------ rendering
+
+    /// Draw the whole screen: transcript on top, an 8-row footer below
+    /// (status row + 3-row input box).
+    fn render(&self, f: &mut ratatui::Frame) {
+        let area = f.area();
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        // Fill the whole frame with base1 first, so the 2-col side
+        // margins of the message area are base1, not the terminal default.
+        f.render_widget(
+            Block::default().style(Style::default().bg(theme::BASE1)),
+            area,
+        );
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(FOOTER_HEIGHT)])
+            .split(area);
+
+        self.render_messages(f, chunks[0]);
+        self.render_footer(f, chunks[1]);
+    }
+
+    /// The transcript: every non-system message as pre-wrapped lines,
+    /// with the scrollback applied via `Paragraph::scroll`.
+    fn render_messages(&self, f: &mut ratatui::Frame, area: Rect) {
+        let width = area.width.saturating_sub(4).max(1); // 2-col margin each side
+        let lines = build_message_lines(&self.clown, width as usize);
+
+        // `scroll` is measured from the bottom; convert to a top offset.
+        // (usize throughout: `saturating_sub` on a signed type only
+        // saturates at the type's min, so it would not clamp to 0 here.)
+        let max_offset = lines.len().saturating_sub(area.height as usize);
+        let offset = max_offset.saturating_sub(self.scroll as usize);
+        let offset = offset.min(u16::MAX as usize) as u16;
+
+        let para = Paragraph::new(lines)
+            .scroll((offset, 0))
+            .block(Block::default().style(Style::default().bg(theme::BASE1)));
+        f.render_widget(para, Rect::new(area.x + 2, area.y, width, area.height));
+    }
+
+    fn render_footer(&self, f: &mut ratatui::Frame, area: Rect) {
+        f.render_widget(
+            Block::default().style(Style::default().bg(theme::BASE2)),
+            area,
+        );
+
+        // Footer geometry: 1 row padding, the status row, 1 row gap,
+        // the 3-row input box, then the remaining rows as padding.
+        let inner = Rect::new(
+            area.x + 2,
+            area.y,
+            area.width.saturating_sub(4).max(1),
+            area.height,
+        );
+        let [status, input_box] = {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Length(INPUT_ROWS as u16),
+                    Constraint::Min(0),
+                ])
+                .split(inner);
+            // rows: 1 top padding, status, 1 gap, input box, padding.
+            [chunks[1], chunks[3]]
+        };
+
+        // Status row: "User:" left, "Tokens: N" right.
+        let status_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(5),
+                Constraint::Min(1),
+                Constraint::Min(1),
+            ])
+            .split(status);
+        f.render_widget(
+            Paragraph::new(Line::from("User:").style(Style::default().fg(theme::TEXT))),
+            status_chunks[0],
+        );
+        let token_spans = vec![
+            Span::styled("Tokens:", Style::default().fg(theme::SECONDARY)),
+            Span::raw(" "),
+            Span::styled(
+                self.clown.agent.total_tokens.to_string(),
+                Style::default().fg(theme::SECONDARY),
+            ),
+        ];
+        f.render_widget(
+            Paragraph::new(Line::from(token_spans).right_aligned()),
+            status_chunks[2],
+        );
+
+        // Input box: the buffer on base1, with a filled cursor span.
+        f.render_widget(
+            Block::default().style(Style::default().bg(theme::BASE1)),
+            input_box,
+        );
+        f.render_widget(self.input_widget(input_box.width as usize), input_box);
+    }
+
+    /// The input buffer as `INPUT_ROWS` pre-wrapped lines, with a
+    /// filled cursor span at the cursor position.
+    fn input_widget(&self, width: usize) -> Paragraph<'_> {
+        let content = self.input.as_str();
+        let cursor_byte = self.input.cursor();
+        let wrapped_all = wrap_text(content, width);
+        let wrapped_up_to_cursor = wrap_text(&content[..cursor_byte], width);
+        let cursor_line = wrapped_up_to_cursor.len().saturating_sub(1);
+        let cursor_col = wrapped_up_to_cursor
+            .last()
+            .map(|l| l.chars().count())
+            .unwrap_or(0);
+
+        let mut rows = Vec::with_capacity(INPUT_ROWS);
+        for i in 0..INPUT_ROWS {
+            let line = wrapped_all.get(i).cloned().unwrap_or_default();
+            let style = Style::default().fg(theme::PRIMARY);
+            if i == cursor_line {
+                let (left, right) = split_at_char(&line, cursor_col);
+                rows.push(Line::from(vec![
+                    Span::styled(left, style),
+                    Span::raw(" ").style(Style::default().bg(theme::PRIMARY)),
+                    Span::styled(right, style),
+                ]));
+            } else {
+                rows.push(Line::from(line).style(style));
+            }
+        }
+        Paragraph::new(rows)
+    }
 }
 
 // ============================================================ rendering
@@ -366,7 +500,7 @@ impl Tui {
 /// Colors are 256-color indexed (SGR `38;5;N;48;5;N`) rather than 24-bit
 /// truecolor — terminals that don't honor truecolor otherwise
 /// misrender the background. The hex values are kept in the comments.
-pub mod theme {
+mod theme {
     use ratatui::style::Color;
 
     pub const TEXT: Color = Color::Indexed(255); // 0xECEFF4
@@ -382,34 +516,6 @@ const INPUT_ROWS: usize = 3;
 /// Tool results are clamped to 10 lines.
 const TOOL_MAX_LINES: usize = 10;
 
-/// Geometry inside the footer: 1 row top padding, status row at +1, a 1-row
-/// spacing gap at +2, then the 3-row input box at +3.
-const INPUT_AREA_TOP: u16 = 3;
-const INPUT_AREA_HEIGHT: u16 = INPUT_ROWS as u16;
-
-/// Draw the whole screen.
-fn draw(f: &mut Frame, clown: &Clown, input: &Input, scroll: i32) {
-    let area = f.area();
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    // Fill the whole root frame with base1 before drawing anything, so
-    // the 2-col side margins of the message area are base1 too, not the
-    // terminal default.
-    f.render_widget(
-        Block::default().style(Style::default().bg(theme::BASE1)),
-        area,
-    );
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(FOOTER_HEIGHT)])
-        .split(area);
-
-    messages(f, clown, chunks[0], scroll);
-    footer(f, clown, input, chunks[1]);
-}
-
 fn role_style(role: Role) -> Color {
     match role {
         Role::User => theme::ACCENT,
@@ -418,10 +524,8 @@ fn role_style(role: Role) -> Color {
     }
 }
 
-/// Build every message as flat, pre-wrapped lines, then apply scrollback.
-fn messages(f: &mut Frame, clown: &Clown, area: Rect, scroll: i32) {
-    let width = (area.width.saturating_sub(4)).max(1) as usize; // pad 2/2
-
+/// Build every message as flat, pre-wrapped lines.
+fn build_message_lines(clown: &Clown, width: usize) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     for msg in &clown.agent.messages {
         if msg.role == Role::System {
@@ -435,13 +539,10 @@ fn messages(f: &mut Frame, clown: &Clown, area: Rect, scroll: i32) {
         };
 
         if let Some(text) = msg.content.as_ref().and_then(|c| c.text()) {
-            let mut wrapped: Vec<Line<'static>> =
-                wrap_text(text, width).into_iter().map(Line::from).collect();
-            wrapped.truncate(max_lines);
-            for l in wrapped.iter_mut() {
-                l.style = Style::default().fg(color);
+            let wrapped: Vec<String> = wrap_text(text, width);
+            for l in wrapped.into_iter().take(max_lines) {
+                lines.push(Line::from(l).style(Style::default().fg(color)));
             }
-            lines.append(&mut wrapped);
         }
 
         // Tool calls rendered as "name<20>arguments".
@@ -471,138 +572,13 @@ fn messages(f: &mut Frame, clown: &Clown, area: Rect, scroll: i32) {
         )));
     }
 
-    // Scrollback: scroll == 0 is pinned to the bottom, scroll > 0
-    // shifts the window UP by that many lines, hiding the last
-    // `scroll` lines.
-    let available = area.height as i32;
-    let total = lines.len() as i32;
-    let start = (total - available - scroll).clamp(0, (total - available).max(0));
-
-    let para = Paragraph::new(
-        lines
-            .iter()
-            .skip(start as usize)
-            .cloned()
-            .collect::<Vec<Line>>(),
-    )
-    .block(Block::default().style(Style::default().bg(theme::BASE1)))
-    .wrap(Wrap { trim: false });
-
-    f.render_widget(
-        para,
-        Rect {
-            x: area.x + 2,
-            y: area.y,
-            width: width as u16,
-            height: area.height,
-        },
-    );
-}
-
-fn footer(f: &mut Frame, clown: &Clown, input: &Input, area: Rect) {
-    // Whole footer is base2.
-    f.render_widget(
-        Block::default().style(Style::default().bg(theme::BASE2)),
-        area,
-    );
-
-    // Status row:
-    //   "User:"  -> left, col 0, .text
-    //   "Tokens:"-> starts 20 cols from the right, .secondary
-    //   number   -> starts 10 cols from the right, .secondary
-    // The footer is padded 2 left/right, so the inner width is width-4.
-    let iw = (area.width as usize).saturating_sub(4).max(1);
-    let num = clown.agent.total_tokens.to_string();
-    let tokens_col = iw.saturating_sub(20);
-    let num_col = iw.saturating_sub(10);
-
-    let mut spans: Vec<Span> = Vec::new();
-    spans.push(Span::styled(
-        "User:".to_string(),
-        Style::default().fg(theme::TEXT),
-    ));
-    if tokens_col > 5 {
-        spans.push(Span::raw(" ".repeat(tokens_col - 5)));
-    }
-    spans.push(Span::styled(
-        "Tokens:".to_string(),
-        Style::default().fg(theme::SECONDARY),
-    ));
-    let after_tokens = tokens_col + 7;
-    if num_col > after_tokens {
-        spans.push(Span::raw(" ".repeat(num_col - after_tokens)));
-    }
-    spans.push(Span::styled(num, Style::default().fg(theme::SECONDARY)));
-    f.render_widget(
-        Paragraph::new(Line::from(spans)),
-        Rect {
-            x: area.x + 2,
-            y: area.y + 1,
-            width: iw as u16,
-            height: 1,
-        },
-    );
-
-    // 3-row input box, inset 2 cols each side, on base1.
-    let box_w = iw as u16;
-    let box_rect = Rect {
-        x: area.x + 2,
-        y: area.y + INPUT_AREA_TOP,
-        width: box_w,
-        height: INPUT_AREA_HEIGHT,
-    };
-    f.render_widget(
-        Block::default().style(Style::default().bg(theme::BASE1)),
-        box_rect,
-    );
-
-    // The buffer wrapped to the box width, clipped to 3 rows, text in
-    // .primary, with a filled .primary cursor at the (col, line)
-    // position.
-    let content = input.as_str();
-    let cursor_byte = input.cursor();
-    let wrapped_all = wrap_text(content, box_w as usize);
-    let upto = &content[..cursor_byte];
-    let wrapped_up = wrap_text(upto, box_w as usize);
-    let cursor_line = wrapped_up.len().saturating_sub(1);
-    let cursor_col = wrapped_up.last().map(|l| l.chars().count()).unwrap_or(0);
-
-    for i in 0..INPUT_ROWS {
-        let line = wrapped_all.get(i).cloned().unwrap_or_default();
-        let mut line_spans: Vec<Span> = Vec::new();
-        if i == cursor_line {
-            let (left, right) = split_at_char(&line, cursor_col);
-            line_spans.push(Span::styled(left, Style::default().fg(theme::PRIMARY)));
-            line_spans.push(Span::styled(" ", Style::default().bg(theme::PRIMARY)));
-            line_spans.push(Span::styled(right, Style::default().fg(theme::PRIMARY)));
-        } else {
-            line_spans.push(Span::styled(line, Style::default().fg(theme::PRIMARY)));
-        }
-        let w: usize = line_spans.iter().map(span_width).sum();
-        if w < box_w as usize {
-            line_spans.push(Span::raw(" ".repeat(box_w as usize - w)));
-        }
-
-        f.render_widget(
-            Paragraph::new(Line::from(line_spans)),
-            Rect {
-                x: box_rect.x,
-                y: box_rect.y + i as u16,
-                width: box_w,
-                height: 1,
-            },
-        );
-    }
+    lines
 }
 
 /// Split `s` after `col` characters into `(left, right)`, char-boundary safe.
 fn split_at_char(s: &str, col: usize) -> (String, String) {
     let byte = s.char_indices().nth(col).map(|(i, _)| i).unwrap_or(s.len());
     (s[..byte].to_string(), s[byte..].to_string())
-}
-
-fn span_width(s: &Span) -> usize {
-    s.content.chars().count()
 }
 
 /// Word wrap: greedy word packing, hard-breaks for over-long tokens,
